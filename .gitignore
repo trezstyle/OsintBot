@@ -1,0 +1,19 @@
+# Environment
+.env
+
+# Runtime
+bot.log
+__pycache__/
+*.pyc
+*.pyo
+fim_hashes.json
+
+# Temp
+/tmp/
+
+# PDFs
+pdf_reports/
+
+# OS
+.DS_Store
+Thumbs.db
