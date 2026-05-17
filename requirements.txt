@@ -4,4 +4,6 @@ psutil
 phonenumbers
 python-whois
 requests
+requests-cache
+dnspython
 reportlab

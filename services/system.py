@@ -171,32 +171,14 @@ def check_cve(pkg):
     try:
         ver = "unknown"
         try:
-            # Safe: subprocess with arg list, validated package name
             dpkg_out = subprocess.run(
-                ["dpkg", "-l", safe_pkg],
+                ["dpkg-query", "-W", "-f=${Version}", safe_pkg],
                 capture_output=True, text=True, timeout=5
             ).stdout.strip()
-            lines = [l for l in dpkg_out.split("\n") if l.strip()]
-            if lines:
-                parts = lines[-1].split()
-                if len(parts) >= 3:
-                    ver = parts[2]
-        except: pass
-
-        if ver == "unknown":
-            try:
-                which_out = subprocess.run(
-                    ["which", safe_pkg],
-                    capture_output=True, text=True, timeout=3
-                ).stdout.strip()
-                if which_out:
-                    ver_out = subprocess.run(
-                        [safe_pkg, "--version"],
-                        capture_output=True, text=True, timeout=5
-                    ).stdout.strip().split("\n")[0]
-                    if ver_out:
-                        ver = ver_out.strip()
-            except: pass
+            if dpkg_out:
+                ver = dpkg_out
+        except Exception:
+            pass
 
         # NVD API call - safe, URL params are validated package name
         import urllib.parse

@@ -24,6 +24,10 @@ build/
 .bandit
 htmlcov/
 
+# Caches
+mitre_cache.json
+api_cache.sqlite
+
 # OS
 .DS_Store
 Thumbs.db

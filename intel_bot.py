@@ -9,14 +9,10 @@ import time
 from telebot.types import BotCommand
 
 from config import settings
+from logging_config import configure_logging
 from runtime import polling_loop
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(settings.paths.bot_log_file), logging.StreamHandler()],
-)
-log = logging.getLogger("cyber_volt")
+log = configure_logging(log_file=settings.paths.bot_log_file)
 
 from ui.handlers import bot  # noqa: E402
 from watchers import alert_watcher, suricata_watcher  # noqa: E402

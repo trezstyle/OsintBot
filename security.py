@@ -32,18 +32,18 @@ def load_authorization() -> None:
         if AUTH_CONFIGURED:
             log.warning("Authorization configured but no valid numeric IDs were found — bot will reject commands.")
         else:
-            log.warning("No ALLOWED_USERS or ALLOWED_CHATS configured — bot is OPEN TO EVERYONE!")
+            log.warning("No ALLOWED_USERS or ALLOWED_CHATS configured — bot will REJECT ALL requests! Set ALLOWED_USERS in .env")
     else:
         log.info(f"Auth loaded: {len(ALLOWED_USERS)} users, {len(ALLOWED_CHATS)} chats")
 
 
 def is_authorized(user_id: int, chat_id: int) -> bool:
     """Check if a user/chat is allowed to use privileged commands.
-    
-    If no whitelist is configured, returns True (open mode).
+
+    If no whitelist is configured, rejects all requests.
     """
-    if not AUTH_CONFIGURED and not ALLOWED_USERS and not ALLOWED_CHATS:
-        return True
+    if not AUTH_CONFIGURED:
+        return False
     if user_id in ALLOWED_USERS:
         return True
     if chat_id in ALLOWED_CHATS:
@@ -108,10 +108,6 @@ def validate_file_path(text: str, allowed_prefixes: Optional[List[str]] = None) 
         path = Path(text).resolve()
     except RuntimeError:
         return None  # Path resolution failed
-    
-    # Check path exists
-    if not path.exists():
-        return None
     
     # Check allowed prefixes
     if allowed_prefixes:

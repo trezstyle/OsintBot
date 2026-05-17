@@ -1,20 +1,50 @@
 """Threat intelligence and external lookup services."""
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import hashlib
+import json
 import logging
+import os
 import re
 import socket
 import ssl
 import subprocess
+import time
 from urllib.parse import quote_plus
+from pathlib import Path
 
 import requests
 import whois
 
+try:
+    import dns.resolver
+except ImportError:
+    dns = None
+
 from config import settings
 
 log = logging.getLogger("cyber_volt")
+
+# ── Optional caching for external API calls ──
+try:
+    import requests_cache
+    requests_cache.install_cache(
+        "api_cache", backend="sqlite", expire_after=300,
+        allowable_methods=("GET", "HEAD"),
+    )
+except ImportError:
+    pass
+
+
+def _strip_html(value: str) -> str:
+    value = re.sub(r"<script\b[^>]*>.*?</script>", " ", value, flags=re.I | re.S)
+    value = re.sub(r"<style\b[^>]*>.*?</style>", " ", value, flags=re.I | re.S)
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"&quot;|&#34;", '"', value)
+    value = re.sub(r"&amp;", "&", value)
+    value = re.sub(r"&nbsp;|&#160;", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def _is_ipv4(ip: str) -> bool:
@@ -26,8 +56,9 @@ def save_to_log(target, report):
     try:
         with open(settings.paths.threat_intel_log_file, "a") as f:
             f.write(f"\n--- [{datetime.now()}] ---\nTarget: {target}\n{report}\n")
-    except Exception:
-        pass
+    except Exception as e:
+        log.error(f"Failed to write threat intel log: {e}")
+
 
 def get_vt_report(ip):
     key = settings.api.vt_api_key
@@ -37,7 +68,7 @@ def get_vt_report(ip):
                          headers={"x-apikey": key}, timeout=10)
         if r.status_code == 200:
             d = r.json()["data"]["attributes"]
-            stats = d["last_analysis_stats"]
+            stats = d.get("last_analysis_stats", {})
             mal = stats.get("malicious", 0)
             sus = stats.get("suspicious", 0)
             country = d.get("country", "N/A")
@@ -47,6 +78,8 @@ def get_vt_report(ip):
         return f"VT: HTTP {r.status_code}"
     except Exception as e:
         return f"VT: {e}"
+
+
 def get_abuseipdb_report(ip):
     key = settings.api.abuse_api_key
     if not key: return "AbuseIPDB: No API key"
@@ -64,6 +97,8 @@ def get_abuseipdb_report(ip):
         return f"AbuseIPDB: HTTP {r.status_code}"
     except Exception as e:
         return f"AbuseIPDB: {e}"
+
+
 def get_geoip(ip):
     try:
         r = requests.get(f"https://ipinfo.io/{ip}/json", timeout=5)
@@ -76,6 +111,8 @@ def get_geoip(ip):
         return "GeoIP: N/A"
     except:
         return "GeoIP: N/A"
+
+
 def get_whois(domain):
     try:
         w = whois.whois(domain)
@@ -85,6 +122,8 @@ def get_whois(domain):
                 f"Organization: `{w.org}`")
     except:
         return "Whois: Failed"
+
+
 def get_subdomains(domain):
     try:
         r = requests.get(f"https://crt.sh/?q={domain}&output=json",
@@ -95,27 +134,47 @@ def get_subdomains(domain):
         return f"crt.sh: HTTP {r.status_code}"
     except Exception as e:
         return f"crt.sh: {e}"
+
+
 def threat_hunt_ip(ip):
-    vt = get_vt_report(ip)
-    abuse = get_abuseipdb_report(ip)
-    geo = get_geoip(ip)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        vt_fut = pool.submit(get_vt_report, ip)
+        abuse_fut = pool.submit(get_abuseipdb_report, ip)
+        geo_fut = pool.submit(get_geoip, ip)
+        vt = vt_fut.result()
+        abuse = abuse_fut.result()
+        geo = geo_fut.result()
     report = f"🎯 *Threat Hunt: `{ip}`*\n\n{vt}\n\n{abuse}\n\n{geo}"
     save_to_log(ip, report)
     return report
+
+
 def threat_hunt_domain(domain):
-    whois_data = get_whois(domain)
-    subs = get_subdomains(domain)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        whois_fut = pool.submit(get_whois, domain)
+        subs_fut = pool.submit(get_subdomains, domain)
+        whois_data = whois_fut.result()
+        subs = subs_fut.result()
     report = f"🌐 *Domain Recon: `{domain}`*\n\n{whois_data}\n\n📡 *Subdomains (crt.sh):*\n`{subs}`"
     save_to_log(domain, report)
     return report
+
+
 def fmt_pwn(n):
     return f"{n:,}" if n is not None else "N/A"
+
+
 def fmt_data(classes):
     if not classes: return "N/A"
     return ", ".join(classes)
+
+
 def check_hibp(query):
     try:
         hibp_key = settings.api.hibp_api_key
+        if not hibp_key:
+            return "⚠ HIBP: No API key configured. Set HIBP_API_KEY in .env"
+
         if query.lower().startswith("name:"):
             name = query.split(":", 1)[1].strip()
             r = requests.get(f"https://haveibeenpwned.com/api/v3/breach/{name}",
@@ -130,7 +189,7 @@ def check_hibp(query):
                         f"📦 Data: {fmt_data(b.get('DataClasses'))}\n"
                         f"Verified: {'✅ Yes' if b.get('IsVerified') else '❌ No'}\n"
                         f"Spam list: {'⚠ Yes' if b.get('IsSpamList') else 'No'}\n"
-                        f"📝 {b.get('Description', '')[:400]}")
+                        f"📝 {_strip_html(b.get('Description', ''))[:400]}")
             elif r.status_code == 404:
                 return f"🔐 *HIBP*\nBreach `{name}` not found."
             return f"⚠ HIBP: HTTP {r.status_code}"
@@ -152,7 +211,7 @@ def check_hibp(query):
                 result += (f"▫️ *{b.get('Name', 'N/A')}*\n"
                            f"  📅 {b.get('BreachDate', 'N/A')} | 👥 {fmt_pwn(b.get('PwnCount'))}\n"
                            f"  📦 {fmt_data(b.get('DataClasses'))}\n"
-                           f"  {b.get('Description', '')[:200]}\n\n")
+                           f"  {_strip_html(b.get('Description', ''))[:200]}\n\n")
             if len(breaches) > 5:
                 result += f"... and {len(breaches) - 5} more breaches"
             return result
@@ -161,20 +220,58 @@ def check_hibp(query):
         return f"⚠ HIBP: HTTP {r.status_code}"
     except Exception as e:
         return f"HIBP check failed: {e}"
+
+
+# ── MITRE CTI cache ──
+MITRE_CACHE = os.path.join(os.path.dirname(settings.paths.base_dir), "mitre_cache.json") if hasattr(settings.paths, 'base_dir') else "mitre_cache.json"
+MITRE_TTL = 86400
+
+
+def _load_mitre():
+    cache = Path(MITRE_CACHE)
+    if cache.exists() and time.time() - cache.stat().st_mtime < MITRE_TTL:
+        try:
+            return json.loads(cache.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    try:
+        r = requests.get(
+            "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json",
+            timeout=30,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            try:
+                cache.write_text(json.dumps(data))
+            except OSError as e:
+                log.warning(f"Failed to write MITRE cache: {e}")
+            return data
+    except requests.RequestException as e:
+        log.warning(f"Failed to download MITRE CTI: {e}")
+    if cache.exists():
+        try:
+            return json.loads(cache.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"objects": []}
+
+
 def mitre_lookup(tid):
     tid = tid.upper()
-    if not tid.startswith("T"): tid = "T" + tid
+    if not tid.startswith("T"):
+        tid = "T" + tid
     try:
-        r = requests.get("https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json", timeout=15)
-        if r.status_code == 200:
-            for obj in r.json().get("objects", []):
-                if obj.get("type") == "attack-pattern" and tid in obj.get("external_references", [{}])[0].get("external_id", ""):
-                    name = obj.get("name", "N/A")
-                    desc = obj.get("description", "N/A")[:500]
-                    tactics = ", ".join(p.get("phase_name", "") for p in obj.get("kill_chain_phases", [])) or "N/A"
-                    return f"🧠 *MITRE ATT&CK: {tid}*\n**Name:** `{name}`\n**Tactic:** `{tactics}`\n\n{desc}"
-            return f"Technique `{tid}` not found."
-        return f"MITRE CTI: HTTP {r.status_code}"
+        data = _load_mitre()
+        for obj in data.get("objects", []):
+            if obj.get("type") != "attack-pattern":
+                continue
+            refs = obj.get("external_references", [])
+            if any(tid == ref.get("external_id", "") for ref in refs):
+                name = obj.get("name", "N/A")
+                desc = _strip_html(obj.get("description", "N/A"))[:500]
+                tactics = ", ".join(p.get("phase_name", "") for p in obj.get("kill_chain_phases", [])) or "N/A"
+                return f"🧠 *MITRE ATT&CK: {tid}*\n**Name:** `{name}`\n**Tactic:** `{tactics}`\n\n{desc}"
+        return f"Technique `{tid}` not found."
     except Exception as e:
         return f"MITRE lookup failed: {e}"
 
@@ -304,6 +401,13 @@ def check_blacklist(ip: str) -> str:
 
 
 def _dig_txt(name):
+    if dns is not None:
+        try:
+            answers = dns.resolver.resolve(name, "TXT", lifetime=10)
+            return " ".join(str(r) for r in answers)
+        except Exception as e:
+            log.debug(f"dns TXT lookup failed for {name}: {e}")
+            return ""
     try:
         result = subprocess.run(
             ["dig", "+short", "TXT", name],
@@ -316,6 +420,13 @@ def _dig_txt(name):
 
 
 def _has_mx(domain):
+    if dns is not None:
+        try:
+            answers = dns.resolver.resolve(domain, "MX", lifetime=10)
+            return True, str(answers[0].exchange)
+        except Exception as e:
+            log.debug(f"dns MX lookup failed for {domain}: {e}")
+            return False, "not found"
     try:
         result = subprocess.run(
             ["dig", "+short", "MX", domain],
@@ -539,27 +650,10 @@ def check_phone(phone: str) -> str:
         "Accept-Language": "en-US,en;q=0.9",
     }
 
-    def strip_html(value: str) -> str:
-        value = re.sub(r"<script\b[^>]*>.*?</script>", " ", value, flags=re.I | re.S)
-        value = re.sub(r"<style\b[^>]*>.*?</style>", " ", value, flags=re.I | re.S)
-        value = re.sub(r"<[^>]+>", " ", value)
-        value = re.sub(r"&quot;|&#34;", '"', value)
-        value = re.sub(r"&amp;", "&", value)
-        value = re.sub(r"&nbsp;|&#160;", " ", value)
-        return re.sub(r"\s+", " ", value).strip()
-
     def check_telegram(plus_number: str, digits: str) -> str:
-        """
-        Note: t.me/+ links ALWAYS return a landing page for any valid phone format.
-        Telegram does NOT expose a public API to verify phone number existence.
-        """
-        return "⚠ Cannot verify via HTTP (t.me/+ links always work for any number format — actual existence requires contacting)"
+        return "⚠ Cannot verify via HTTP (t.me/+ links always work for any valid phone format — actual existence requires contacting)"
 
     def check_whatsapp(digits: str) -> str:
-        """
-        Note: wa.me ALWAYS returns a page for any valid phone format.
-        WhatsApp does NOT expose a public API to verify phone number existence.
-        """
         return "⚠ Cannot verify via HTTP (wa.me always responds — WhatsApp requires sending a message to confirm)"
 
     def check_duckduckgo(plus_number: str, international: str) -> dict:
@@ -595,8 +689,8 @@ def check_phone(phone: str) -> str:
 
                 for block in result_blocks:
                     href = block[0]
-                    title = strip_html(block[1])
-                    snippet = strip_html(block[2]) if len(block) > 2 else ""
+                    title = _strip_html(block[1])
+                    snippet = _strip_html(block[2]) if len(block) > 2 else ""
                     key = (href, title)
                     if key in seen:
                         continue
