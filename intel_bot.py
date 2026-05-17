@@ -69,6 +69,9 @@ def set_commands():
         ("scan", "🕸 Network scan (fast / full)"), ("whois", "🏢 WHOIS lookup by domain"),
         ("recon", "🌐 Domain / IP reconnaissance"), ("fim", "📋 File Integrity Monitor (add/check)"),
         ("cve", "🧠 CVE vulnerability check for package"), ("hibp", "🔐 Breach search (email/domain)"),
+        ("ssl", "🔒 SSL certificate check"), ("httpcheck", "🛡 HTTP security headers check"),
+        ("bl", "⚫ DNSBL blacklist check"), ("bandwidth", "🌐 Network bandwidth by interface"),
+        ("email", "📧 Email OSINT report"),
         ("mitre", "🧬 MITRE ATT&CK technique search"), ("report", "📄 Generate PDF report"),
         ("alerts", "🚨 View Suricata IDS alerts"),
     ]

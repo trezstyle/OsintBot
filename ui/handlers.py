@@ -11,8 +11,8 @@ from config import settings
 from services.fim import fim_add, fim_check
 from services.reporting import generate_report
 from services.scanner import scan_network
-from services.system import analyze_logs, check_cve, format_audit, format_status, format_top
-from services.threat_intel import check_hibp, get_whois, mitre_lookup, threat_hunt_domain, threat_hunt_ip
+from services.system import analyze_logs, check_cve, format_audit, format_bandwidth, format_status, format_top
+from services.threat_intel import check_blacklist, check_email, check_hibp, check_http_headers, check_ssl, get_whois, mitre_lookup, threat_hunt_domain, threat_hunt_ip
 from ui.keyboards import fim_keyboard, help_keyboard, logs_keyboard, menu_text, scan_keyboard
 from watchers import suricata_alerts, suricata_lock
 
@@ -72,7 +72,7 @@ def cmd_help(m):
     global ALERT_CHAT_ID
     with ALERT_LOCK: ALERT_CHAT_ID = m.chat.id
     bot.reply_to(m, menu_text(), parse_mode="Markdown", reply_markup=help_keyboard())
-@bot.message_handler(commands=["status", "top", "logs", "audit", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts"])
+@bot.message_handler(commands=["status", "top", "logs", "audit", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth", "email"])
 def cmd_handler(m):
     if not is_message_authorized(m): return
     global ALERT_CHAT_ID
@@ -83,6 +83,7 @@ def cmd_handler(m):
     try:
         if cmd == "status": bot.reply_to(m, format_status(), parse_mode="Markdown")
         elif cmd == "top": bot.reply_to(m, format_top(), parse_mode="Markdown")
+        elif cmd == "bandwidth": bot.reply_to(m, format_bandwidth(), parse_mode="Markdown")
         elif cmd == "audit": bot.reply_to(m, format_audit(), parse_mode="Markdown")
         elif cmd == "logs":
             if args:
@@ -121,6 +122,18 @@ def cmd_handler(m):
         elif cmd == "hibp":
             if args: bot.reply_to(m, check_hibp(args[0]), parse_mode="Markdown")
             else: bot.register_next_step_handler(bot.reply_to(m, "🔐 *Enter email or domain:*", parse_mode="Markdown"), process_hibp)
+        elif cmd == "ssl":
+            if args: bot.reply_to(m, check_ssl(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "🔒 *Enter domain for SSL check:*", parse_mode="Markdown"), process_ssl)
+        elif cmd == "httpcheck":
+            if args: bot.reply_to(m, check_http_headers(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "🛡 *Enter domain or URL for HTTP header check:*", parse_mode="Markdown"), process_httpcheck)
+        elif cmd == "bl":
+            if args: bot.reply_to(m, check_blacklist(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "⚫ *Enter IP address for blacklist check:*", parse_mode="Markdown"), process_bl)
+        elif cmd == "email":
+            if args: bot.reply_to(m, check_email(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "📧 *Enter email address for OSINT:*", parse_mode="Markdown"), process_email)
         elif cmd == "mitre":
             if args: bot.reply_to(m, mitre_lookup(args[0]), parse_mode="Markdown")
             else: bot.register_next_step_handler(bot.reply_to(m, "🧬 *Enter technique ID:*\nExample: `T1059`", parse_mode="Markdown"), process_mitre)
@@ -217,10 +230,23 @@ def handle_callback(call):
         elif cmd == "mitre":
             msg = bot.send_message(cid, "🧬 *Enter MITRE technique ID:*\nExample: `T1059`", parse_mode="Markdown")
             bot.register_next_step_handler(msg, process_mitre)
+        elif cmd == "ssl":
+            msg = bot.send_message(cid, "🔒 *Enter domain for SSL check:*", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_ssl)
+        elif cmd == "httpcheck":
+            msg = bot.send_message(cid, "🛡 *Enter domain or URL for HTTP header check:*", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_httpcheck)
+        elif cmd == "bl":
+            msg = bot.send_message(cid, "⚫ *Enter IP address for blacklist check:*", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_bl)
+        elif cmd == "email":
+            msg = bot.send_message(cid, "📧 *Enter email address for OSINT:*", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_email)
 
         # ── System ──
         elif cmd == "status": bot.send_message(cid, format_status(), parse_mode="Markdown")
         elif cmd == "top": bot.send_message(cid, format_top(), parse_mode="Markdown")
+        elif cmd == "bandwidth": bot.send_message(cid, format_bandwidth(), parse_mode="Markdown")
         elif cmd == "audit": bot.send_message(cid, format_audit(), parse_mode="Markdown")
 
         # ── Report / Alerts ──
@@ -297,6 +323,34 @@ def process_hibp(m):
     if not e: bot.reply_to(m, "❌ No email entered."); return
     bot.reply_to(m, f"🔐 *Checking `{e}`...*\n💡 Tip: use `name:BreachName` for details", parse_mode="Markdown")
     bot.reply_to(m, check_hibp(e), parse_mode="Markdown")
+def process_ssl(m):
+    if not is_message_authorized(m): return
+    with ALERT_LOCK: global ALERT_CHAT_ID; ALERT_CHAT_ID = m.chat.id
+    d = m.text.strip()
+    if not d: bot.reply_to(m, "❌ No domain entered."); return
+    bot.reply_to(m, f"🔒 *Checking SSL for `{d}`...*", parse_mode="Markdown")
+    bot.reply_to(m, check_ssl(d), parse_mode="Markdown")
+def process_httpcheck(m):
+    if not is_message_authorized(m): return
+    with ALERT_LOCK: global ALERT_CHAT_ID; ALERT_CHAT_ID = m.chat.id
+    u = m.text.strip()
+    if not u: bot.reply_to(m, "❌ No URL entered."); return
+    bot.reply_to(m, f"🛡 *Checking HTTP headers for `{u}`...*", parse_mode="Markdown")
+    bot.reply_to(m, check_http_headers(u), parse_mode="Markdown")
+def process_bl(m):
+    if not is_message_authorized(m): return
+    with ALERT_LOCK: global ALERT_CHAT_ID; ALERT_CHAT_ID = m.chat.id
+    ip = m.text.strip()
+    if not ip: bot.reply_to(m, "❌ No IP entered."); return
+    bot.reply_to(m, f"⚫ *Checking DNSBLs for `{ip}`...*", parse_mode="Markdown")
+    bot.reply_to(m, check_blacklist(ip), parse_mode="Markdown")
+def process_email(m):
+    if not is_message_authorized(m): return
+    with ALERT_LOCK: global ALERT_CHAT_ID; ALERT_CHAT_ID = m.chat.id
+    e = m.text.strip()
+    if not e: bot.reply_to(m, "❌ No email entered."); return
+    bot.reply_to(m, f"📧 *Running Email OSINT for `{e}`...*", parse_mode="Markdown")
+    bot.reply_to(m, check_email(e), parse_mode="Markdown")
 def process_mitre(m):
     if not is_message_authorized(m): return
     t = m.text.strip()

@@ -1,6 +1,11 @@
 """Threat intelligence and external lookup services."""
 from datetime import datetime
+import hashlib
 import logging
+import re
+import socket
+import ssl
+import subprocess
 
 import requests
 import whois
@@ -165,3 +170,196 @@ def mitre_lookup(tid):
         return f"MITRE CTI: HTTP {r.status_code}"
     except Exception as e:
         return f"MITRE lookup failed: {e}"
+
+
+def check_ssl(domain: str) -> str:
+    domain = domain.strip().replace("https://", "").replace("http://", "").split("/")[0]
+    try:
+        ctx = ssl.create_default_context()
+        with ctx.wrap_socket(socket.socket(), server_hostname=domain) as s:
+            s.settimeout(10)
+            s.connect((domain, 443))
+            cert = s.getpeercert()
+
+        def cert_name(items):
+            for group in items or []:
+                for key, value in group:
+                    if key == "commonName":
+                        return value
+            return "N/A"
+
+        subject = cert_name(cert.get("subject"))
+        issuer = cert_name(cert.get("issuer"))
+        valid_from = cert.get("notBefore", "N/A")
+        valid_to = cert.get("notAfter", "N/A")
+        sans = [v for k, v in cert.get("subjectAltName", []) if k == "DNS"]
+
+        expiry = datetime.strptime(valid_to, "%b %d %H:%M:%S %Y %Z")
+        days_remaining = (expiry - datetime.utcnow()).days
+        status = "Valid" if days_remaining >= 0 else "Expired"
+        emoji = "🟢" if days_remaining > 14 else "🟡" if days_remaining >= 0 else "🔴"
+
+        return (
+            f"{emoji} *SSL Check: `{domain}`*\n"
+            f"Status: `{status}`\n"
+            f"Days remaining: `{days_remaining}`\n"
+            f"Valid from: `{valid_from}`\n"
+            f"Valid to: `{valid_to}`\n"
+            f"Issuer: `{issuer}`\n"
+            f"Subject: `{subject}`\n"
+            f"SANs: `{len(sans)}`"
+        )
+    except (ConnectionError, socket.timeout, ssl.SSLError, OSError) as e:
+        log.error(f"check_ssl({domain}) error: {e}")
+        return f"🔴 *SSL Check: `{domain}`*\nFailed: `{e}`"
+    except Exception as e:
+        log.error(f"check_ssl({domain}) error: {e}")
+        return f"SSL check failed: {e}"
+
+
+def check_http_headers(url: str) -> str:
+    target = url.strip().replace("https://", "").replace("http://", "").split("/")[0]
+    try:
+        r = requests.get(f"https://{target}", timeout=10, allow_redirects=True)
+        headers = r.headers
+
+        hsts = headers.get("Strict-Transport-Security", "")
+        hsts_match = re.search(r"max-age=(\d+)", hsts.lower())
+        hsts_ok = bool(hsts_match and int(hsts_match.group(1)) > 0)
+        csp_ok = bool(headers.get("Content-Security-Policy"))
+        xfo = headers.get("X-Frame-Options", "").upper()
+        xfo_ok = xfo in ("DENY", "SAMEORIGIN")
+        xcto_ok = headers.get("X-Content-Type-Options", "").lower() == "nosniff"
+        ref_ok = bool(headers.get("Referrer-Policy"))
+        perm_ok = bool(headers.get("Permissions-Policy"))
+        xss_present = bool(headers.get("X-XSS-Protection"))
+
+        checks = [
+            ("Strict-Transport-Security", hsts_ok, "max-age present"),
+            ("Content-Security-Policy", csp_ok, "present"),
+            ("X-Frame-Options", xfo_ok, "DENY or SAMEORIGIN"),
+            ("X-Content-Type-Options", xcto_ok, "nosniff"),
+            ("Referrer-Policy", ref_ok, "present"),
+            ("Permissions-Policy", perm_ok, "present"),
+        ]
+        passed = sum(1 for _, ok, _ in checks if ok) + (0 if xss_present else 1)
+        grade = "A" if passed >= 6 else "B" if passed == 5 else "C" if passed >= 3 else "F"
+        grade_emoji = "🟢" if grade == "A" else "🟡" if grade in ("B", "C") else "🔴"
+
+        lines = [
+            f"{grade_emoji} *HTTP Security Headers: `{target}`*",
+            f"Final URL: `{r.url}`",
+            f"Status: `{r.status_code}`",
+            f"Grade: `{grade}` ({passed}/7)\n",
+        ]
+        for name, ok, expected in checks:
+            lines.append(f"{'✅' if ok else '❌'} `{name}` — {expected}")
+        lines.append(f"{'⚠️' if xss_present else '🟢'} `X-XSS-Protection` — obsolete{'; present' if xss_present else '; not present'}")
+        return "\n".join(lines)
+    except requests.RequestException as e:
+        log.error(f"check_http_headers({target}) error: {e}")
+        return f"🔴 *HTTP Security Headers: `{target}`*\nFailed: `{e}`"
+    except Exception as e:
+        log.error(f"check_http_headers({target}) error: {e}")
+        return f"HTTP header check failed: {e}"
+
+
+def check_blacklist(ip: str) -> str:
+    dnsbls = [
+        ("zen.spamhaus.org", "Spamhaus ZEN"),
+        ("b.barracudacentral.org", "Barracuda"),
+        ("bl.spamcop.net", "SpamCop"),
+        ("dnsbl.sorbs.net", "SORBS"),
+        ("cbl.abuseat.org", "AbuseAT CBL"),
+    ]
+    ip = ip.strip()
+    try:
+        parts = ip.split(".")
+        if len(parts) != 4 or not all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+            return f"❌ Invalid IP address: `{ip}`"
+
+        reversed_ip = ".".join(reversed(parts))
+        lines = [f"⚫ *DNSBL Blacklist Check: `{ip}`*"]
+        for zone, name in dnsbls:
+            query = f"{reversed_ip}.{zone}"
+            try:
+                socket.gethostbyname(query)
+                lines.append(f"✅ *{name}*: Listed")
+            except socket.gaierror:
+                lines.append(f"🟢 *{name}*: Clean")
+            except Exception as e:
+                log.error(f"check_blacklist({ip}) {name} error: {e}")
+                lines.append(f"⚠ *{name}*: Error `{e}`")
+        return "\n".join(lines)
+    except Exception as e:
+        log.error(f"check_blacklist({ip}) error: {e}")
+        return f"Blacklist check failed: {e}"
+
+
+def _dig_txt(name):
+    try:
+        result = subprocess.run(
+            ["dig", "+short", "TXT", name],
+            capture_output=True, text=True, timeout=10, check=False
+        )
+        return " ".join(line.strip().strip('"') for line in result.stdout.splitlines() if line.strip())
+    except Exception as e:
+        log.error(f"_dig_txt({name}) error: {e}")
+        return ""
+
+
+def _has_mx(domain):
+    try:
+        result = subprocess.run(
+            ["dig", "+short", "MX", domain],
+            capture_output=True, text=True, timeout=10, check=False
+        )
+        if result.stdout.strip():
+            return True, result.stdout.strip().splitlines()[0]
+    except Exception as e:
+        log.error(f"MX dig failed for {domain}: {e}")
+    try:
+        socket.getaddrinfo(domain, 25)
+        return True, "domain resolves"
+    except Exception as e:
+        log.error(f"MX fallback failed for {domain}: {e}")
+        return False, "not found"
+
+
+def check_email(email: str) -> str:
+    email = email.strip()
+    try:
+        if not re.match(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", email):
+            return f"❌ Invalid email address: `{email}`"
+
+        domain = email.rsplit("@", 1)[1].lower()
+        mx_ok, mx_info = _has_mx(domain)
+        gravatar_hash = hashlib.md5(email.lower().encode()).hexdigest()
+        gravatar_url = f"https://www.gravatar.com/{gravatar_hash}.json?d=404"
+        gravatar = requests.get(gravatar_url, timeout=10)
+        gravatar_ok = gravatar.status_code == 200
+
+        spf_txt = _dig_txt(domain)
+        spf_alt = _dig_txt(f"_spf.{domain}")
+        spf_ok = "v=spf1" in f"{spf_txt} {spf_alt}".lower()
+        dmarc_txt = _dig_txt(f"_dmarc.{domain}")
+        dmarc_ok = "v=dmarc1" in dmarc_txt.lower()
+        hibp = check_hibp(email)
+
+        lines = [
+            f"📧 *Email OSINT: `{email}`*",
+            f"Domain: `{domain}`",
+            f"{'✅' if mx_ok else '❌'} MX: `{mx_info}`",
+            f"{'✅' if gravatar_ok else '🟢'} Gravatar: {'Profile found' if gravatar_ok else 'No public profile'}",
+            f"{'✅' if spf_ok else '❌'} SPF: {'Found' if spf_ok else 'Not found'}",
+            f"{'✅' if dmarc_ok else '❌'} DMARC: {'Found' if dmarc_ok else 'Not found'}",
+            "",
+            hibp,
+        ]
+        return "\n".join(lines)
+    except requests.RequestException as e:
+        log.error(f"check_email({email}) error: {e}")
+        return f"Email OSINT failed: {e}"
+    except Exception as e:
+        log.error(f"check_email({email}) error: {e}")
+        return f"Email OSINT failed: {e}"

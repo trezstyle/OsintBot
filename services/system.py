@@ -272,3 +272,48 @@ def check_cve(pkg):
         return f"⚠ NVD API: HTTP {r.status_code}"
     except Exception as e:
         return f"CVE check failed: {e}"
+
+
+def format_speed(bytes_per_sec):
+    try:
+        if bytes_per_sec >= 1024 * 1024:
+            return f"{bytes_per_sec / 1024 / 1024:.2f} MB/s"
+        return f"{bytes_per_sec / 1024:.1f} KB/s"
+    except Exception as e:
+        log.error(f"format_speed error: {e}")
+        return "N/A"
+
+
+def format_bandwidth():
+    try:
+        counters = psutil.net_io_counters(pernic=True)
+        time.sleep(1)
+        counters2 = psutil.net_io_counters(pernic=True)
+
+        def total_fmt(value):
+            if value >= 1024 * 1024 * 1024:
+                return f"{value / 1024 / 1024 / 1024:.2f} GB"
+            return f"{value / 1024 / 1024:.1f} MB"
+
+        lines = ["🌐 *Network Bandwidth*"]
+        for iface, before in counters.items():
+            after = counters2.get(iface)
+            if not after:
+                continue
+            rx_rate = after.bytes_recv - before.bytes_recv
+            tx_rate = after.bytes_sent - before.bytes_sent
+            if after.bytes_recv == 0 and after.bytes_sent == 0:
+                continue
+            if rx_rate == 0 and tx_rate == 0 and after.bytes_recv < 1024 and after.bytes_sent < 1024:
+                continue
+            lines.append(
+                f"\n*{iface}*\n"
+                f"↓ `{format_speed(rx_rate)}`  ↑ `{format_speed(tx_rate)}`\n"
+                f"RX: `{total_fmt(after.bytes_recv)}`  TX: `{total_fmt(after.bytes_sent)}`"
+            )
+        if len(lines) == 1:
+            lines.append("No active interfaces found.")
+        return "\n".join(lines)
+    except Exception as e:
+        log.error(f"format_bandwidth error: {e}")
+        return f"Bandwidth check failed: {e}"

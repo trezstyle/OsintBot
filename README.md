@@ -21,6 +21,11 @@ Designed for cybersecurity analysts, penetration testers, and system administrat
 | `/fim` | 📋 File Integrity Monitor (add/check) |
 | `/cve` | 🧠 CVE vulnerability check for package |
 | `/hibp` | 🔐 Breach search (email/domain) |
+| `/ssl` | 🔒 SSL certificate check |
+| `/httpcheck` | 🛡 HTTP security headers check |
+| `/bl` | ⚫ DNSBL blacklist check |
+| `/bandwidth` | 🌐 Network bandwidth by interface |
+| `/email` | 📧 Email OSINT report |
 | `/mitre` | 🧬 MITRE ATT&CK technique search |
 | `/report` | 📄 Generate PDF report |
 | `/alerts` | 🚨 Suricata IDS alerts |
@@ -32,9 +37,9 @@ All functions available as clickable buttons in the `/help` menu:
 | Category | Buttons |
 |----------|---------|
 | 🛡 Threat Intel | IP Threat Hunt, Domain Recon |
-| 🕸 Network | Fast Scan, Full Scan |
-| 📊 Monitoring | System Status, Top Processes, Logs |
-| 🔐 Security | BSI Audit, FIM Monitor, CVE, HIBP, MITRE |
+| 🕸 Network | Fast Scan, Full Scan, Blacklist |
+| 📊 Monitoring | System Status, Top Processes, Logs, Bandwidth |
+| 🔐 Security | BSI Audit, FIM Monitor, CVE, HIBP, MITRE, SSL Check, HTTP Headers, Email OSINT |
 | 🚨 Alerts | Suricata Alerts |
 | 📄 Reports | PDF Report |
 
@@ -195,6 +200,8 @@ Paid API key (~$3.50/month) enables full email search.
 - **GeoIP** (ipinfo.io) — City, region, country, ISP
 - **WHOIS** — Domain registration data
 - **crt.sh** — Subdomain enumeration
+- **DNSBL Blacklist Check** — Spamhaus, Barracuda, SpamCop, SORBS, AbuseAT CBL
+- **Email OSINT** — MX, Gravatar, SPF, DMARC, HIBP report
 - **Brute Force Alerts** — Real-time auth.log monitoring
 
 ## 🕸 Network Scanner
@@ -204,6 +211,7 @@ Paid API key (~$3.50/month) enables full email search.
 ## 📊 System Monitoring
 - **System Dashboard** — CPU/RAM/Disk/Load/Network bars
 - **Top Processes** — PID, CPU%, MEM%, RSS in clean format
+- **Network Bandwidth** — Per-interface live RX/TX rates and totals
 - **Log Analyzer** — Failed logins, sudo events, SSH activity, top attackers
 
 ## 🚨 Suricata IDS Alerts
@@ -223,6 +231,8 @@ Paid API key (~$3.50/month) enables full email search.
 - **CVE Check** — NVD (NIST) vulnerability database
 - **HIBP Check** — Have I Been Pwned breach search (domain-based, free)
 - **MITRE ATT&CK** — Technique lookup by T-ID
+- **SSL Check** — Certificate subject, issuer, SAN count, and expiry status
+- **HTTP Headers** — Security header scoring for HSTS, CSP, frame, content-type, referrer, and permissions policy
 
 ## 📄 Reports
 - **PDF Report** — System status, top processes, failed logins, compliance audit

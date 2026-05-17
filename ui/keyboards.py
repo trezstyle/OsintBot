@@ -31,7 +31,18 @@ def help_keyboard():
         InlineKeyboardButton("🔐 HIBP Check", callback_data="h_hibp"),
     )
     kb.add(
+        InlineKeyboardButton("🔒 SSL Check", callback_data="h_ssl"),
+        InlineKeyboardButton("🛡 HTTP Headers", callback_data="h_httpcheck"),
+    )
+    kb.add(
+        InlineKeyboardButton("⚫ Blacklist", callback_data="h_bl"),
+        InlineKeyboardButton("🌐 Bandwidth", callback_data="h_bandwidth"),
+    )
+    kb.add(
         InlineKeyboardButton("🧬 MITRE ATT&CK", callback_data="h_mitre"),
+    )
+    kb.add(
+        InlineKeyboardButton("📧 Email OSINT", callback_data="h_email"),
     )
     # Reports
     kb.add(
