@@ -64,10 +64,6 @@ def help_keyboard():
     kb.add(
         InlineKeyboardButton("🚨 Suricata Alerts", callback_data="h_alerts"),
     )
-    # Navigation
-    kb.add(
-        InlineKeyboardButton("📖 Help", callback_data="h_help"),
-    )
     return kb
 
 def menu_text():

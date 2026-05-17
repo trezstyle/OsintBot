@@ -9,8 +9,7 @@ Designed for cybersecurity analysts, penetration testers, and system administrat
 
 | Command | Description |
 |---------|-------------|
-| `/start` | 🤖 Start the bot / greeting |
-| `/help` | 📖 Open menu with all functions |
+| `/start` | 🤖 Start the bot / menu |
 | `/status` | 🖥 System dashboard (CPU/RAM/Disk) |
 | `/top` | 📊 Top processes by CPU/RAM |
 | `/logs` | 📜 Log analysis (failed/sudo/ssh/attack) |

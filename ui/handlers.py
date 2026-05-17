@@ -65,13 +65,7 @@ def cmd_start(m):
     if not is_message_authorized(m): return
     global ALERT_CHAT_ID
     with ALERT_LOCK: ALERT_CHAT_ID = m.chat.id
-    bot.reply_to(m, f"{LOGO}\n🤖 *Cyber-Volt SOC Master v3.0*\n\nFull-featured SOC platform in Telegram.\n\nUse /help to open the menu.", parse_mode="Markdown", reply_markup=help_keyboard())
-@bot.message_handler(commands=["help"])
-def cmd_help(m):
-    if not is_message_authorized(m): return
-    global ALERT_CHAT_ID
-    with ALERT_LOCK: ALERT_CHAT_ID = m.chat.id
-    bot.reply_to(m, menu_text(), parse_mode="Markdown", reply_markup=help_keyboard())
+    bot.reply_to(m, f"{LOGO}\n🤖 *Cyber-Volt SOC Master v3.0*\n\nFull-featured SOC platform in Telegram.\n\nUse /start to open the menu.", parse_mode="Markdown", reply_markup=help_keyboard())
 @bot.message_handler(commands=["status", "top", "logs", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth", "email", "tor", "proxy", "ctlogs", "phone", "fw", "compliance"])
 def cmd_handler(m):
     if not is_message_authorized(m): return
@@ -299,8 +293,7 @@ def handle_callback(call):
 
         # ── Menu / Hello / Help ──
         elif cmd == "menu": bot.send_message(cid, menu_text(), parse_mode="Markdown", reply_markup=help_keyboard())
-        elif cmd == "hello": cmd_hello(call.message)
-        elif cmd == "help": cmd_help(call.message)
+        elif cmd == "hello": cmd_start(call.message)
 
     except Exception as e:
         log.error(f"callback error ({cmd}): {e}")

@@ -63,8 +63,8 @@ def cleanup_webhook():
 
 def set_commands():
     data = [
-        ("start", "🤖 Start the bot / greeting"), ("help", "📖 Open menu with all functions"),
-        ("status", "🖥 System dashboard (CPU/RAM/Disk)"), ("top", "📊 Top processes by CPU/RAM"),
+        ("start", "🤖 Start the bot / greeting"),
+        ("status", "🖥 System dashboard (CPU/RAM/Disk)"),
         ("logs", "📜 Log analysis (failed/sudo/ssh/attack)"),
         ("scan", "🕸 Network scan (fast / full)"), ("whois", "🏢 WHOIS lookup by domain"),
         ("recon", "🌐 Domain / IP reconnaissance"), ("fim", "📋 File Integrity Monitor (add/check)"),
