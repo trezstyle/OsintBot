@@ -65,7 +65,7 @@ def set_commands():
     data = [
         ("start", "🤖 Start the bot / greeting"), ("help", "📖 Open menu with all functions"),
         ("status", "🖥 System dashboard (CPU/RAM/Disk)"), ("top", "📊 Top processes by CPU/RAM"),
-        ("logs", "📜 Log analysis (failed/sudo/ssh/attack)"), ("audit", "🛡 BSI Compliance Audit"),
+        ("logs", "📜 Log analysis (failed/sudo/ssh/attack)"),
         ("scan", "🕸 Network scan (fast / full)"), ("whois", "🏢 WHOIS lookup by domain"),
         ("recon", "🌐 Domain / IP reconnaissance"), ("fim", "📋 File Integrity Monitor (add/check)"),
         ("cve", "🧠 CVE vulnerability check for package"), ("hibp", "🔐 Breach search (email/domain)"),

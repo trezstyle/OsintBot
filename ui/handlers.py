@@ -11,7 +11,7 @@ from config import settings
 from services.fim import fim_add, fim_check
 from services.reporting import generate_report
 from services.scanner import scan_network
-from services.system import analyze_logs, check_cve, format_audit, format_bandwidth, format_compliance, format_firewall, format_status, format_top
+from services.system import analyze_logs, check_cve, format_bandwidth, format_compliance, format_firewall, format_status, format_top
 from services.threat_intel import check_blacklist, check_ctlogs, check_email, check_hibp, check_http_headers, check_phone, check_proxy, check_ssl, check_tor, get_whois, mitre_lookup, threat_hunt_domain, threat_hunt_ip
 from ui.keyboards import fim_keyboard, help_keyboard, logs_keyboard, menu_text, scan_keyboard
 from watchers import suricata_alerts, suricata_lock
@@ -72,7 +72,7 @@ def cmd_help(m):
     global ALERT_CHAT_ID
     with ALERT_LOCK: ALERT_CHAT_ID = m.chat.id
     bot.reply_to(m, menu_text(), parse_mode="Markdown", reply_markup=help_keyboard())
-@bot.message_handler(commands=["status", "top", "logs", "audit", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth", "email", "tor", "proxy", "ctlogs", "phone", "fw", "compliance"])
+@bot.message_handler(commands=["status", "top", "logs", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth", "email", "tor", "proxy", "ctlogs", "phone", "fw", "compliance"])
 def cmd_handler(m):
     if not is_message_authorized(m): return
     global ALERT_CHAT_ID
@@ -84,7 +84,6 @@ def cmd_handler(m):
         if cmd == "status": bot.reply_to(m, format_status(), parse_mode="Markdown")
         elif cmd == "top": bot.reply_to(m, format_top(), parse_mode="Markdown")
         elif cmd == "bandwidth": bot.reply_to(m, format_bandwidth(), parse_mode="Markdown")
-        elif cmd == "audit": bot.reply_to(m, format_audit(), parse_mode="Markdown")
         elif cmd == "logs":
             if args:
                 bot.reply_to(m, analyze_logs(args[0]), parse_mode="Markdown")
@@ -277,7 +276,6 @@ def handle_callback(call):
         elif cmd == "status": bot.send_message(cid, format_status(), parse_mode="Markdown")
         elif cmd == "top": bot.send_message(cid, format_top(), parse_mode="Markdown")
         elif cmd == "bandwidth": bot.send_message(cid, format_bandwidth(), parse_mode="Markdown")
-        elif cmd == "audit": bot.send_message(cid, format_audit(), parse_mode="Markdown")
         elif cmd == "fw": bot.send_message(cid, format_firewall(), parse_mode="Markdown")
         elif cmd == "compliance": bot.send_message(cid, format_compliance(), parse_mode="Markdown")
 

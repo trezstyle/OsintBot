@@ -9,7 +9,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from config import settings
-from services.system import format_audit, recent_failed_logins
+from services.system import format_compliance, recent_failed_logins
 
 def generate_report():
     try:
@@ -35,7 +35,7 @@ def generate_report():
                Paragraph(failed_logins.replace("\n", "<br/>"), styles["Normal"]),
                Spacer(1, 12),
                Paragraph("Compliance Audit", styles["Heading2"]),
-               Paragraph(format_audit().replace("\n", "<br/>"), styles["Normal"])]
+               Paragraph(format_compliance().replace("\n", "<br/>"), styles["Normal"])]
         doc.build(els)
         return path
     except Exception as e:

@@ -23,7 +23,7 @@ def help_keyboard():
     )
     # Security
     kb.add(
-        InlineKeyboardButton("🛡 BSI Audit", callback_data="h_audit"),
+        InlineKeyboardButton("✅ Compliance", callback_data="h_compliance"),
         InlineKeyboardButton("📋 FIM Monitor", callback_data="h_fim"),
     )
     kb.add(

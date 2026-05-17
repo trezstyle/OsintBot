@@ -14,7 +14,6 @@ Designed for cybersecurity analysts, penetration testers, and system administrat
 | `/status` | 🖥 System dashboard (CPU/RAM/Disk) |
 | `/top` | 📊 Top processes by CPU/RAM |
 | `/logs` | 📜 Log analysis (failed/sudo/ssh/attack) |
-| `/audit` | 🛡 BSI Compliance Audit |
 | `/scan` | 🕸 Network scan (fast / full) |
 | `/whois` | 🏢 WHOIS lookup by domain |
 | `/recon` | 🌐 Domain / IP reconnaissance |
@@ -45,7 +44,7 @@ All functions available as clickable buttons in the `/help` menu:
 | 🛡 Threat Intel | IP Threat Hunt, Domain Recon, Tor Check, Proxy Check, CT Logs, Phone OSINT |
 | 🕸 Network | Fast Scan, Full Scan, Blacklist |
 | 📊 Monitoring | System Status, Top Processes, Logs, Bandwidth |
-| 🔐 Security | BSI Audit, CIS Compliance, Firewall, FIM Monitor, CVE, HIBP, MITRE, SSL Check, HTTP Headers, Email OSINT |
+| 🔐 Security | CIS Compliance, Firewall, FIM Monitor, CVE, HIBP, MITRE, SSL Check, HTTP Headers, Email OSINT |
 | 🚨 Alerts | Suricata Alerts |
 | 📄 Reports | PDF Report |
 
@@ -236,7 +235,7 @@ Paid API key (~$3.50/month) enables full email search.
 - **Alert buffer** — keeps last 50 alerts in memory
 
 ## 🔐 Security Checks
-- **BSI IT-Grundschutz Audit** — SSH config, firewall, ports, disk encryption, AppArmor
+- **CIS Compliance** — 15 automated security checks (SSH, firewall, kernel, passwords, auditd)
 - **File Integrity Monitor** — SHA256 hash tracking for critical files
 - **CVE Check** — NVD (NIST) vulnerability database
 - **HIBP Check** — Have I Been Pwned breach search (domain-based, free)

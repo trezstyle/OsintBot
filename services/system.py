@@ -128,59 +128,6 @@ def format_status():
         return "\n".join(lines)
     except Exception as e:
         return f"Status failed: {e}"
-def format_audit():
-    try:
-        checks = []
-        if settings.paths.sshd_config_file.exists():
-            cfg = settings.paths.sshd_config_file.read_text(errors="ignore")
-            checks.append(("🔐 Root SSH", "✅ DISABLED" if "PermitRootLogin no" in cfg else "❌ ENABLED"))
-        fw_status = subprocess.run(
-            ["ufw", "status"], capture_output=True, text=True, timeout=5, check=False
-        )
-        fw = "Status: active" in fw_status.stdout
-        checks.append(("🛡 Firewall", "✅ ACTIVE" if fw else "❌ INACTIVE"))
-        try:
-            ss = subprocess.run(
-                ["ss", "-tlnp"], capture_output=True, text=True, timeout=5, check=False
-            ).stdout.splitlines()
-            ports = sorted({
-                m.group(1)
-                for line in ss
-                if "LISTEN" in line
-                for m in [re.search(r":(\d+)\b", line.split()[3] if len(line.split()) > 3 else "")]
-                if m
-            }, key=lambda p: int(p))[:5]
-            checks.append(("🔌 Open Ports", f"`{', '.join(ports)}`" if ports else "None"))
-        except:
-            checks.append(("🔌 Open Ports", "N/A"))
-        try:
-            checks.append(("🚫 Failed Logins", f"{failed_login_count()} total"))
-        except:
-            checks.append(("🚫 Failed Logins", "N/A"))
-        uptime_str = subprocess.run(
-            ["uptime", "-p"], capture_output=True, text=True, timeout=5, check=False
-        ).stdout.strip().replace("up ", "")
-        checks.append(("⏱ Uptime", uptime_str))
-        u = shutil.disk_usage(settings.paths.root_path)
-        checks.append(("💾 Disk Usage", f"{u.used/u.total*100:.1f}%"))
-        m = psutil.virtual_memory()
-        checks.append(("🧠 Memory", f"{m.percent:.1f}%"))
-        load = os.getloadavg()
-        checks.append(("📈 Load Avg", f"{load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}"))
-        try:
-            failed_out = subprocess.run(
-                ["systemctl", "--failed", "--no-legend"],
-                capture_output=True, text=True, timeout=5, check=False
-            ).stdout
-            failed = len([line for line in failed_out.splitlines() if line.strip()])
-            checks.append(("⚙ Failed Svcs", str(failed)))
-        except:
-            checks.append(("⚙ Failed Svcs", "N/A"))
-        lines = ["🛡 *BSI Compliance Audit*\n"]
-        lines += [f"• {icon}: {status}" for icon, status in checks]
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Audit failed: {e}"
 def analyze_logs(filter_type):
     path = str(settings.paths.auth_log_file)
     if not os.path.exists(path):
