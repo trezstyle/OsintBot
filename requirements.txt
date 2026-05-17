@@ -1,0 +1,6 @@
+pyTelegramBotAPI
+python-dotenv
+psutil
+python-whois
+requests
+reportlab

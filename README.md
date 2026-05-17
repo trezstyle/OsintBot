@@ -76,6 +76,101 @@ Result sent to chat        → full alert with threat intelligence
 ├── README.md             # This file
 └── pdf_reports/          # Generated PDF reports (auto-created)
 
+## 🏗 Production Project Structure
+
+```text
+/root/cyber-volt/
+├── intel_bot.py                  # Entry point
+├── config.py                     # Typed settings and environment loading
+├── security.py                   # Authorization and input validation
+├── runtime.py                    # Telegram polling loop
+├── watchers.py                   # Background auth and Suricata watchers
+├── health.py                     # Standalone production healthcheck
+├── logging_config.py             # Optional structured rotating logging
+├── services/                     # Threat intel, scanner, FIM, system, reporting
+├── ui/                           # Telegram handlers and keyboards
+├── Dockerfile                    # Production container build
+├── Dockerfile.compose            # Compose deployment definition
+├── pyproject.toml                # Package metadata
+├── env.example                   # Sanitized environment template
+└── .github/workflows/            # CI and Docker image workflows
+```
+
+## 🚀 Quick Start (Docker)
+
+```bash
+cp env.example .env
+# Edit .env and set TELEGRAM_TOKEN plus ALLOWED_USERS.
+docker build -t cyber-volt-soc-bot:3.0.0 .
+docker run --rm --env-file .env \
+  -v "$PWD/logs:/app/logs" \
+  -v "$PWD/data:/app/data" \
+  cyber-volt-soc-bot:3.0.0
+```
+
+Compose alternative:
+
+```bash
+docker compose -f Dockerfile.compose up -d --build
+docker compose -f Dockerfile.compose logs -f
+```
+
+## 🔧 Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TELEGRAM_TOKEN` | ✅ Yes | none | Telegram BotFather token. |
+| `VT_API_KEY` | ❌ No | empty | VirusTotal API key for IP reputation. |
+| `ABUSE_API_KEY` | ❌ No | empty | AbuseIPDB API key. |
+| `HIBP_API_KEY` | ❌ No | empty | Have I Been Pwned API key for email searches. |
+| `ALLOWED_USERS` | ✅ Recommended | empty | Comma-separated Telegram user IDs allowed to use the bot. |
+| `ALLOWED_CHATS` | ❌ No | empty | Comma-separated Telegram chat IDs allowed to use the bot. |
+| `FIM_ALLOWED_PREFIXES` | ✅ Recommended | `/etc,/root/cyber-volt` | Comma-separated paths allowed for FIM monitoring. |
+| `PID_FILE` | ❌ No | `bot.pid` | PID file used by runtime guard and healthcheck. |
+| `BOT_LOG_FILE` | ❌ No | `bot.log` | Bot runtime log path. |
+| `LOG_FILE` | ❌ No | `threat_intel_log.md` | Threat intel query history path. |
+| `FIM_FILE` | ❌ No | `fim_hashes.json` | FIM hash database path. |
+| `REPORT_FILE` | ❌ No | `/tmp/cyber_volt_report.pdf` | Generated report path. |
+| `AUTH_LOG_FILE` | ❌ No | `/var/log/auth.log` | Auth log path for failed login analysis. |
+| `SURICATA_FAST_LOG_FILE` | ❌ No | `/var/log/suricata/fast.log` | Suricata fast log path. |
+| `SSHD_CONFIG_FILE` | ❌ No | `/etc/ssh/sshd_config` | SSH daemon config path for audit checks. |
+| `NMAP_PATH` | ❌ No | `/usr/bin/nmap` | nmap binary path. |
+| `ROOT_PATH` | ❌ No | `/` | Filesystem root used for disk checks. |
+| `LOG_ENABLED` | ❌ No | `true` | Enable or disable configured logging. |
+| `LOG_LEVEL` | ❌ No | `INFO` | Python logging level. |
+| `LOG_FORMAT` | ❌ No | `text` | Use `json` for structured logs. |
+| `LOG_MAX_BYTES` | ❌ No | `10485760` | Rotating log file max size. |
+| `LOG_BACKUP_COUNT` | ❌ No | `3` | Number of rotated log backups. |
+
+## 🔒 Security Recommendations
+
+- Keep `.env` out of git and rotate `TELEGRAM_TOKEN` if it is ever exposed.
+- Always set `ALLOWED_USERS` or `ALLOWED_CHATS`; otherwise the bot can be open to anyone who finds it.
+- Run the container as the bundled non-root `cybervolt` user and mount host logs read-only.
+- Keep `FIM_ALLOWED_PREFIXES` narrow and avoid broad writable paths.
+- Use least-privilege API keys and monitor provider quotas.
+- Review scanner usage before enabling broad network scans in production environments.
+
+## 🏭 Production Deployment
+
+- Build from `Dockerfile` and deploy with `Dockerfile.compose` or your orchestrator.
+- Mount `/app/logs` and `/app/data` to persistent volumes.
+- Mount host logs such as `/var/log/auth.log` and `/var/log/suricata` read-only when those integrations are needed.
+- Use Docker restart policy `unless-stopped` or an equivalent supervisor.
+- Run `python3 health.py` or the Docker `HEALTHCHECK` to verify process and Telegram API connectivity.
+- Use `LOG_FORMAT=json` when shipping logs to a central collector.
+
+## 🧪 CI/CD
+
+Badges placeholder:
+
+```markdown
+[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![Docker](https://github.com/OWNER/REPO/actions/workflows/docker.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/docker.yml)
+```
+
+The CI workflow runs dependency installation, `flake8`, `pylint`, `bandit`, and Python compile checks on Python 3.12. The Docker workflow builds the image on pushes to `main` and can push to GitHub Container Registry.
+
 ## 🔐 API Keys
 
 | Key | Service | Required | Cost |

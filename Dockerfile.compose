@@ -1,0 +1,21 @@
+services:
+  cyber-volt-soc-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cyber-volt-soc-bot:3.0.0
+    container_name: cyber-volt-soc-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      BOT_LOG_FILE: /app/logs/bot.log
+      LOG_FILE: /app/logs/threat_intel_log.md
+      FIM_FILE: /app/data/fim_hashes.json
+      PID_FILE: /app/data/bot.pid
+      REPORT_FILE: /app/data/cyber_volt_report.pdf
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - /var/log/auth.log:/var/log/auth.log:ro
+      - /var/log/suricata:/var/log/suricata:ro

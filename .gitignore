@@ -3,6 +3,7 @@
 
 # Runtime
 bot.log
+bot.pid
 __pycache__/
 *.pyc
 *.pyo
@@ -13,6 +14,15 @@ fim_hashes.json
 
 # PDFs
 pdf_reports/
+
+# Python packaging and test artifacts
+*.egg-info
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.bandit
+htmlcov/
 
 # OS
 .DS_Store

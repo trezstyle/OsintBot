@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  lint-security-compile:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8 pylint bandit
+
+      - name: Flake8
+        run: flake8 . --max-line-length=250 --extend-ignore=E203,W503
+
+      - name: Pylint
+        run: >
+          pylint intel_bot.py config.py security.py runtime.py watchers.py services ui
+          --disable=C0114,C0115,C0116,C0103,R0903,R0912,R0913,R0914,R0915,R1702,W0718,W1203
+          --fail-under=7.0
+
+      - name: Bandit
+        run: bandit -r . -x ./.git,./.venv,./venv -ll
+
+      - name: Compile checks
+        run: python3 -c "import compileall; raise SystemExit(0 if compileall.compile_dir('.', quiet=1) else 1)"

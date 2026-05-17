@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cyber-volt-soc-bot"
+version = "3.0.0"
+description = "Cyber-Volt SOC Bot for Telegram-based security operations."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+  { name = "Cyber-Volt Maintainers", email = "trezstyle@gmail.com" }
+]
+dynamic = ["dependencies"]
+
+[tool.setuptools]
+py-modules = [
+  "config",
+  "health",
+  "intel_bot",
+  "logging_config",
+  "runtime",
+  "security",
+  "watchers"
+]
+
+[tool.setuptools.packages.find]
+include = ["services*", "ui*"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }

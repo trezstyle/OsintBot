@@ -1,0 +1,310 @@
+"""Telegram UI handlers for Cyber-Volt SOC Bot."""
+import logging
+from pathlib import Path
+import re
+import threading
+
+import telebot
+
+import security
+from config import settings
+from services.fim import fim_add, fim_check
+from services.reporting import generate_report
+from services.scanner import scan_network
+from services.system import analyze_logs, check_cve, format_audit, format_status, format_top
+from services.threat_intel import check_hibp, get_whois, mitre_lookup, threat_hunt_domain, threat_hunt_ip
+from ui.keyboards import fim_keyboard, help_keyboard, logs_keyboard, menu_text, scan_keyboard
+from watchers import suricata_alerts, suricata_lock
+
+log = logging.getLogger("cyber_volt")
+security.load_authorization()
+
+UNAUTHORIZED_TEXT = settings.unauthorized_text
+ALERT_CHAT_ID = None
+ALERT_LOCK = threading.Lock()
+
+bot = telebot.TeleBot(settings.api.telegram_token)
+
+LOGO = """```
+ ██████╗██╗   ██╗██████╗ ███████╗██████╗
+██╔════╝██║   ██║██╔══██╗██╔════╝██╔══██╗
+██║     ██║   ██║██████╔╝█████╗  ██████╔╝
+██║     ╚██╗ ██╔╝██╔══██╗██╔══╝  ██╔══██╗
+╚██████╗ ╚████╔╝ ██████╔╝███████╗██║  ██║
+ ╚═════╝  ╚═══╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝
+```"""
+
+
+def is_message_authorized(m):
+    user_id = getattr(getattr(m, "from_user", None), "id", None)
+    chat_id = getattr(getattr(m, "chat", None), "id", None)
+    if security.is_authorized(user_id, chat_id):
+        return True
+    bot.reply_to(m, UNAUTHORIZED_TEXT)
+    return False
+
+
+def is_callback_authorized(call):
+    user_id = getattr(getattr(call, "from_user", None), "id", None)
+    message = getattr(call, "message", None)
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    if security.is_authorized(user_id, chat_id):
+        return True
+    try:
+        bot.answer_callback_query(call.id, text="❌ Unauthorized")
+    except Exception:
+        pass
+    try:
+        bot.send_message(chat_id, UNAUTHORIZED_TEXT)
+    except Exception:
+        pass
+    return False
+
+@bot.message_handler(commands=["start"])
+def cmd_start(m):
+    if not is_message_authorized(m): return
+    global ALERT_CHAT_ID
+    with ALERT_LOCK: ALERT_CHAT_ID = m.chat.id
+    bot.reply_to(m, f"{LOGO}\n🤖 *Cyber-Volt SOC Master v3.0*\n\nFull-featured SOC platform in Telegram.\n\nUse /help to open the menu.", parse_mode="Markdown", reply_markup=help_keyboard())
+@bot.message_handler(commands=["help"])
+def cmd_help(m):
+    if not is_message_authorized(m): return
+    global ALERT_CHAT_ID
+    with ALERT_LOCK: ALERT_CHAT_ID = m.chat.id
+    bot.reply_to(m, menu_text(), parse_mode="Markdown", reply_markup=help_keyboard())
+@bot.message_handler(commands=["status", "top", "logs", "audit", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts"])
+def cmd_handler(m):
+    if not is_message_authorized(m): return
+    global ALERT_CHAT_ID
+    with ALERT_LOCK: ALERT_CHAT_ID = m.chat.id
+    cmd = m.text.split()[0].replace("/", "")
+    args = m.text.split()[1:]
+
+    try:
+        if cmd == "status": bot.reply_to(m, format_status(), parse_mode="Markdown")
+        elif cmd == "top": bot.reply_to(m, format_top(), parse_mode="Markdown")
+        elif cmd == "audit": bot.reply_to(m, format_audit(), parse_mode="Markdown")
+        elif cmd == "logs":
+            if args:
+                bot.reply_to(m, analyze_logs(args[0]), parse_mode="Markdown")
+            else:
+                kb = logs_keyboard()
+                bot.reply_to(m, "📊 *Choose log filter:*", parse_mode="Markdown", reply_markup=kb)
+        elif cmd == "whois":
+            if args: bot.reply_to(m, get_whois(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "🕵️ *Enter a domain for WHOIS:*", parse_mode="Markdown"), process_whois)
+        elif cmd == "recon":
+            if args: process_domain_hunt(m)
+            else: bot.register_next_step_handler(bot.reply_to(m, "🌐 *Enter a domain or IP:*", parse_mode="Markdown"), process_domain_hunt)
+        elif cmd == "scan":
+            if args:
+                fast = "fast" in args
+                target = [a for a in args if a != "fast"][0] if fast else args[0]
+                if fast:
+                    bot.reply_to(m, f"⚡ *Fast scan `{target}`...*", parse_mode="Markdown")
+                    bot.reply_to(m, scan_network(target, all_ports=False), parse_mode="Markdown")
+                else:
+                    bot.reply_to(m, f"🔍 *Full scan `{target}`...* ~5-10 min ⏳", parse_mode="Markdown")
+                    bot.reply_to(m, scan_network(target, all_ports=True), parse_mode="Markdown")
+            else:
+                kb = scan_keyboard()
+                bot.reply_to(m, "🕸 *Choose scan mode:*", parse_mode="Markdown", reply_markup=kb)
+        elif cmd == "fim":
+            if len(args) >= 2 and args[0] == "add": bot.reply_to(m, fim_add(" ".join(args[1:])), parse_mode="Markdown")
+            elif args and args[0] == "check": bot.reply_to(m, fim_check(), parse_mode="Markdown")
+            else:
+                kb = fim_keyboard()
+                bot.reply_to(m, "📋 *File Integrity Monitor*", parse_mode="Markdown", reply_markup=kb)
+        elif cmd == "cve":
+            if args: bot.reply_to(m, check_cve(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "🧠 *Enter package name:*\nExample: `openssl`", parse_mode="Markdown"), process_cve)
+        elif cmd == "hibp":
+            if args: bot.reply_to(m, check_hibp(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "🔐 *Enter email or domain:*", parse_mode="Markdown"), process_hibp)
+        elif cmd == "mitre":
+            if args: bot.reply_to(m, mitre_lookup(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "🧬 *Enter technique ID:*\nExample: `T1059`", parse_mode="Markdown"), process_mitre)
+        elif cmd == "report":
+            bot.reply_to(m, "📄 *Generating PDF report...*")
+            result = generate_report()
+            if isinstance(result, str) and Path(result).exists():
+                with open(result, "rb") as f: bot.send_document(m.chat.id, f, caption="📄 Cyber-Volt SOC Report")
+            else: bot.reply_to(m, f"❌ {result}")
+        elif cmd == "alerts":
+            with suricata_lock:
+                if not suricata_alerts:
+                    bot.reply_to(m, f"📋 *Suricata Alerts*\nNo alerts recorded yet.\nMake sure Suricata is installed and logging to `{settings.paths.suricata_fast_log_file}`", parse_mode="Markdown")
+                else:
+                    lines = ["📋 *Recent Suricata Alerts*", f"Total: {len(suricata_alerts)} alerts\n"]
+                    for a in reversed(suricata_alerts[-10:]):
+                        t = a["time"].strftime("%H:%M:%S")
+                        lines.append(f"`{t}` {a['line'][:80]}")
+                    bot.reply_to(m, "\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        log.error(f"cmd_handler({cmd}): {e}")
+        bot.reply_to(m, f"❌ Error: {e}")
+@bot.message_handler(func=lambda m: True, content_types=["text"])
+def auto_threat_hunt(m):
+    if not is_message_authorized(m): return
+    global ALERT_CHAT_ID
+    with ALERT_LOCK: ALERT_CHAT_ID = m.chat.id
+    text = m.text.strip()
+    if text.startswith("/"): return
+
+    ip_match = re.match(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$", text)
+    if ip_match and all(0 <= int(g) <= 255 for g in ip_match.groups()):
+        bot.reply_to(m, f"🎯 *IP detected:* `{text}`\nRunning threat hunt...", parse_mode="Markdown")
+        bot.reply_to(m, threat_hunt_ip(text), parse_mode="Markdown")
+        return
+
+    if "." in text and not text.startswith(".") and not text.endswith(".") and " " not in text and len(text) > 3:
+        bot.reply_to(m, f"🌐 *Domain detected:* `{text}`\nRunning recon...", parse_mode="Markdown")
+        bot.reply_to(m, threat_hunt_domain(text), parse_mode="Markdown")
+        return
+@bot.callback_query_handler(func=lambda call: call.data.startswith("h_"))
+def handle_callback(call):
+    if not is_callback_authorized(call): return
+    cmd = call.data[2:]
+    cid = call.message.chat.id
+    log.info(f"Callback: data={call.data!r}, cmd={cmd!r}")
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        log.warning(f"answer_callback_query failed: {e}")
+
+    try:
+        # ── IP / Domain ──
+        if cmd == "ip":
+            msg = bot.send_message(cid, "🎯 *Enter an IP address:*", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_ip_hunt)
+        elif cmd == "domain":
+            msg = bot.send_message(cid, "🌐 *Enter a domain:*", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_domain_hunt)
+
+        # ── Scan ──
+        elif cmd == "scan_common":
+            msg = bot.send_message(cid, "⚡ *Enter target:* (Fast — 23 ports)", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_scan_fast)
+        elif cmd == "scan_all":
+            msg = bot.send_message(cid, "🔍 *Enter target:* (Full — all ports, ~5-10 min)", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_scan_full)
+
+        # ── Logs ──
+        elif cmd == "logs_menu":
+            kb = logs_keyboard()
+            bot.send_message(cid, "📊 *Choose log filter:*", parse_mode="Markdown", reply_markup=kb)
+        elif cmd.startswith("logs_"):
+            ftype = cmd.replace("logs_", "")
+            bot.send_message(cid, analyze_logs(ftype), parse_mode="Markdown")
+
+        # ── FIM ──
+        elif cmd == "fim":
+            kb = fim_keyboard()
+            bot.send_message(cid, "📋 *File Integrity Monitor*", parse_mode="Markdown", reply_markup=kb)
+        elif cmd == "fim_add":
+            msg = bot.send_message(cid, "📋 *Enter file path:*\nExample: `/etc/passwd`", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_fim_add)
+        elif cmd == "fim_check":
+            bot.send_message(cid, fim_check(), parse_mode="Markdown")
+
+        # ── Security checks ──
+        elif cmd == "cve":
+            msg = bot.send_message(cid, "🧠 *Enter package name:*\nExample: `openssl`", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_cve)
+        elif cmd == "hibp":
+            msg = bot.send_message(cid, "🔐 *Enter email or domain:*", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_hibp)
+        elif cmd == "mitre":
+            msg = bot.send_message(cid, "🧬 *Enter MITRE technique ID:*\nExample: `T1059`", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_mitre)
+
+        # ── System ──
+        elif cmd == "status": bot.send_message(cid, format_status(), parse_mode="Markdown")
+        elif cmd == "top": bot.send_message(cid, format_top(), parse_mode="Markdown")
+        elif cmd == "audit": bot.send_message(cid, format_audit(), parse_mode="Markdown")
+
+        # ── Report / Alerts ──
+        elif cmd == "report":
+            bot.send_message(cid, "📄 *Generating PDF report...*")
+            result = generate_report()
+            if isinstance(result, str) and Path(result).exists():
+                with open(result, "rb") as f: bot.send_document(cid, f, caption="📄 Cyber-Volt SOC Report")
+            else: bot.send_message(cid, f"❌ {result}")
+        elif cmd == "alerts":
+            with suricata_lock:
+                if not suricata_alerts:
+                    bot.send_message(cid, "📋 *Suricata Alerts*\nNo alerts yet. Suricata must be installed first.", parse_mode="Markdown")
+                else:
+                    lines = ["📋 *Recent Suricata Alerts*\n"]
+                    for a in reversed(suricata_alerts[-15:]):
+                        t = a["time"].strftime("%H:%M:%S")
+                        lines.append(f"`{t}` {a['line'][:100]}")
+                    bot.send_message(cid, "\n".join(lines), parse_mode="Markdown")
+
+        # ── Menu / Hello / Help ──
+        elif cmd == "menu": bot.send_message(cid, menu_text(), parse_mode="Markdown", reply_markup=help_keyboard())
+        elif cmd == "hello": cmd_hello(call.message)
+        elif cmd == "help": cmd_help(call.message)
+
+    except Exception as e:
+        log.error(f"callback error ({cmd}): {e}")
+        try: bot.send_message(cid, f"❌ Error: {e}")
+        except: pass
+def process_ip_hunt(m):
+    if not is_message_authorized(m): return
+    with ALERT_LOCK: global ALERT_CHAT_ID; ALERT_CHAT_ID = m.chat.id
+    ip = m.text.strip()
+    if not ip: bot.reply_to(m, "❌ No IP entered."); return
+    bot.reply_to(m, f"🎯 *Threat Hunting `{ip}`...*", parse_mode="Markdown")
+    bot.reply_to(m, threat_hunt_ip(ip), parse_mode="Markdown")
+def process_domain_hunt(m):
+    if not is_message_authorized(m): return
+    with ALERT_LOCK: global ALERT_CHAT_ID; ALERT_CHAT_ID = m.chat.id
+    text = m.text.strip()
+    if not text: bot.reply_to(m, "❌ Nothing entered."); return
+    if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", text):
+        bot.reply_to(m, f"🎯 *Threat Hunting `{text}`...*", parse_mode="Markdown")
+        bot.reply_to(m, threat_hunt_ip(text), parse_mode="Markdown")
+        return
+    bot.reply_to(m, f"🌐 *Recon `{text}`...*", parse_mode="Markdown")
+    bot.reply_to(m, threat_hunt_domain(text), parse_mode="Markdown")
+def process_scan_fast(m):
+    if not is_message_authorized(m): return
+    t = m.text.strip()
+    if not t: bot.reply_to(m, "❌ No target entered."); return
+    bot.reply_to(m, f"⚡ *Fast scan `{t}`...*", parse_mode="Markdown")
+    bot.reply_to(m, scan_network(t, all_ports=False), parse_mode="Markdown")
+def process_scan_full(m):
+    if not is_message_authorized(m): return
+    t = m.text.strip()
+    if not t: bot.reply_to(m, "❌ No target entered."); return
+    bot.reply_to(m, f"🔍 *Full scan `{t}`...* ~5-10 min ⏳", parse_mode="Markdown")
+    bot.reply_to(m, scan_network(t, all_ports=True), parse_mode="Markdown")
+def process_fim_add(m):
+    if not is_message_authorized(m): return
+    p = m.text.strip()
+    if not p: bot.reply_to(m, "❌ No path entered."); return
+    bot.reply_to(m, fim_add(p), parse_mode="Markdown")
+def process_cve(m):
+    if not is_message_authorized(m): return
+    p = m.text.strip()
+    if not p: bot.reply_to(m, "❌ No package entered."); return
+    bot.reply_to(m, f"🧠 *Checking CVE for `{p}`...*", parse_mode="Markdown")
+    bot.reply_to(m, check_cve(p), parse_mode="Markdown")
+def process_hibp(m):
+    if not is_message_authorized(m): return
+    e = m.text.strip()
+    if not e: bot.reply_to(m, "❌ No email entered."); return
+    bot.reply_to(m, f"🔐 *Checking `{e}`...*\n💡 Tip: use `name:BreachName` for details", parse_mode="Markdown")
+    bot.reply_to(m, check_hibp(e), parse_mode="Markdown")
+def process_mitre(m):
+    if not is_message_authorized(m): return
+    t = m.text.strip()
+    if not t: bot.reply_to(m, "❌ No technique ID entered."); return
+    bot.reply_to(m, f"🧬 *Looking up `{t}` in MITRE...*", parse_mode="Markdown")
+    bot.reply_to(m, mitre_lookup(t), parse_mode="Markdown")
+def process_whois(m):
+    if not is_message_authorized(m): return
+    d = m.text.strip()
+    if d: bot.reply_to(m, get_whois(d), parse_mode="Markdown")
+    else: bot.reply_to(m, "❌ No domain entered.")
