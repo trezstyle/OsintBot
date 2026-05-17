@@ -1,4 +1,5 @@
 """Threat intelligence and external lookup services."""
+from collections import Counter
 from datetime import datetime
 import hashlib
 import logging
@@ -13,6 +14,11 @@ import whois
 from config import settings
 
 log = logging.getLogger("cyber_volt")
+
+
+def _is_ipv4(ip: str) -> bool:
+    parts = ip.strip().split(".")
+    return len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
 
 
 def save_to_log(target, report):
@@ -363,3 +369,188 @@ def check_email(email: str) -> str:
     except Exception as e:
         log.error(f"check_email({email}) error: {e}")
         return f"Email OSINT failed: {e}"
+
+
+def check_tor(ip: str) -> str:
+    ip = ip.strip()
+    try:
+        if not _is_ipv4(ip):
+            return f"❌ Invalid IP address: `{ip}`"
+
+        listed_ports = []
+        reversed_ip = ".".join(reversed(ip.split(".")))
+        for port in [80, 443]:
+            query = f"{reversed_ip}.{port}.ip-port.exitlist.torproject.org"
+            try:
+                socket.gethostbyname(query)
+                listed_ports.append(str(port))
+            except socket.gaierror:
+                pass
+            except Exception as e:
+                log.error(f"check_tor({ip}) DNS port {port} error: {e}")
+
+        bulk_match = False
+        if not listed_ports:
+            try:
+                r = requests.get("https://check.torproject.org/torbulkexitlist", timeout=10)
+                if r.status_code == 200:
+                    bulk_match = ip in r.text.splitlines()
+            except requests.RequestException as e:
+                log.error(f"check_tor({ip}) bulk list error: {e}")
+
+        url = "https://check.torproject.org/"
+        if listed_ports:
+            return (
+                f"🔴 *Tor Check: `{ip}`*\n"
+                f"Listed as Tor exit node on ports `{', '.join(listed_ports)}`\n"
+                f"Source: {url}"
+            )
+        if bulk_match:
+            return (
+                f"🔴 *Tor Check: `{ip}`*\n"
+                f"Listed in Tor bulk exit node list\n"
+                f"Source: {url}"
+            )
+        return (
+            f"🟢 *Tor Check: `{ip}`*\n"
+            f"Not found in Tor exit nodes.\n"
+            f"Source: {url}"
+        )
+    except Exception as e:
+        log.error(f"check_tor({ip}) error: {e}")
+        return f"Tor check failed: {e}"
+
+
+def check_proxy(ip: str) -> str:
+    ip = ip.strip()
+    try:
+        if not _is_ipv4(ip):
+            return f"❌ Invalid IP address: `{ip}`"
+
+        fields = "status,message,country,regionName,city,isp,org,as,proxy,hosting,query,countryCode"
+        r = requests.get(f"http://ip-api.com/json/{ip}?fields={fields}", timeout=10)
+        data = r.json()
+        if data.get("status") != "success":
+            return f"🌐 *Proxy Check: `{ip}`*\nLookup failed: `{data.get('message', 'unknown error')}`"
+
+        proxy = bool(data.get("proxy"))
+        hosting = bool(data.get("hosting"))
+        return (
+            f"🌐 *Proxy Check: `{data.get('query', ip)}`*\n"
+            f"Country: `{data.get('countryCode', 'N/A')}` ({data.get('country', 'N/A')})\n"
+            f"Region: `{data.get('regionName', 'N/A')}`\n"
+            f"City: `{data.get('city', 'N/A')}`\n"
+            f"ISP: `{data.get('isp', 'N/A')}`\n"
+            f"Org: `{data.get('org', 'N/A')}`\n"
+            f"Proxy/VPN: {'✅ DETECTED' if proxy else '🟢 Not detected'}\n"
+            f"Hosting: {'✅ Yes' if hosting else '🟢 No'}\n"
+            f"ASN: `{data.get('as', 'N/A')}`"
+        )
+    except Exception as e:
+        log.error(f"check_proxy({ip}) error: {e}")
+        return f"Proxy check failed: {e}"
+
+
+def check_ctlogs(domain: str) -> str:
+    domain = domain.strip().lower().replace("https://", "").replace("http://", "").split("/")[0]
+    try:
+        if not domain or "." not in domain:
+            return f"❌ Invalid domain: `{domain}`"
+
+        r = requests.get(
+            f"https://crt.sh/?q=%25.{domain}&output=json",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return f"📜 *CT Logs: `{domain}`*\ncrt.sh HTTP `{r.status_code}`"
+
+        certs = r.json()
+        issuers = Counter()
+        subdomains = set()
+        expiry_dates = []
+        age_30 = age_90 = age_old = 0
+        now = datetime.utcnow()
+
+        for cert in certs:
+            common_name = str(cert.get("common_name", "")).lower()
+            name_value = cert.get("name_value", "")
+            names = {common_name}
+            names.update(n.strip().lower().lstrip("*.") for n in str(name_value).splitlines() if n.strip())
+            if not any(name.endswith(domain) or name == domain for name in names):
+                continue
+            subdomains.update(name for name in names if name.endswith(domain) or name == domain)
+
+            issuer_raw = cert.get("issuer_name", "Unknown")
+            issuer = issuer_raw.split("CN=")[-1].split(",")[0] if "CN=" in issuer_raw else "Unknown"
+            issuers[issuer] += 1
+
+            if cert.get("not_after"):
+                try:
+                    expiry_dates.append(datetime.strptime(cert["not_after"], "%Y-%m-%dT%H:%M:%S"))
+                except Exception:
+                    pass
+            if cert.get("entry_timestamp"):
+                try:
+                    ts = datetime.strptime(cert["entry_timestamp"].split(".")[0], "%Y-%m-%dT%H:%M:%S")
+                    age_days = (now - ts).days
+                    if age_days <= 30:
+                        age_30 += 1
+                    elif age_days <= 90:
+                        age_90 += 1
+                    else:
+                        age_old += 1
+                except Exception:
+                    pass
+
+        total = sum(issuers.values())
+        if total == 0:
+            return f"📜 *CT Logs: `{domain}`*\nNo certificates found."
+
+        top_issuers = ", ".join(f"{name} ({count})" for name, count in issuers.most_common(3)) or "N/A"
+        expiry_range = "N/A"
+        if expiry_dates:
+            expiry_range = f"{min(expiry_dates).date()} / {max(expiry_dates).date()}"
+
+        return (
+            f"📜 *CT Logs: `{domain}`*\n"
+            f"Total certs: `{total}`\n"
+            f"Unique issuers: `{len(issuers)}`\n"
+            f"Issuers: `{top_issuers}`\n"
+            f"Unique subdomains: `{len(subdomains)}`\n"
+            f"Expiry range: `{expiry_range}`\n"
+            f"Age distribution: `last 30d={age_30}, 30-90d={age_90}, 90d+={age_old}`"
+        )
+    except Exception as e:
+        log.error(f"check_ctlogs({domain}) error: {e}")
+        return f"CT logs check failed: {e}"
+
+
+def check_phone(phone: str) -> str:
+    phone = phone.strip()
+    try:
+        import phonenumbers
+        from phonenumbers import carrier, geocoder, timezone
+
+        num = phonenumbers.parse(phone, None)
+        if not phonenumbers.is_possible_number(num):
+            return f"📞 *Phone OSINT: `{phone}`*\nInvalid number"
+
+        valid = phonenumbers.is_valid_number(num)
+        country = geocoder.description_for_number(num, "en") or "N/A"
+        carrier_name = carrier.name_for_number(num, "en") or "N/A"
+        tz = ", ".join(timezone.time_zones_for_number(num)) or "N/A"
+        national = phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.NATIONAL)
+        international = phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+
+        return (
+            f"📞 *Phone OSINT: `{international}`*\n"
+            f"Valid: {'✅' if valid else '❌'}\n"
+            f"Country: `{country}`\n"
+            f"Carrier: `{carrier_name}`\n"
+            f"Timezone: `{tz}`\n"
+            f"National: `{national}`"
+        )
+    except Exception as e:
+        log.error(f"check_phone({phone}) error: {e}")
+        return f"Phone parse failed: {e}"

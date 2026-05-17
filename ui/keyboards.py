@@ -44,6 +44,18 @@ def help_keyboard():
     kb.add(
         InlineKeyboardButton("📧 Email OSINT", callback_data="h_email"),
     )
+    kb.add(
+        InlineKeyboardButton("🔍 Tor Check", callback_data="h_tor"),
+        InlineKeyboardButton("🌐 Proxy Check", callback_data="h_proxy"),
+    )
+    kb.add(
+        InlineKeyboardButton("📜 CT Logs", callback_data="h_ctlogs"),
+        InlineKeyboardButton("📞 Phone OSINT", callback_data="h_phone"),
+    )
+    kb.add(
+        InlineKeyboardButton("🛡 Firewall", callback_data="h_fw"),
+        InlineKeyboardButton("✅ Compliance", callback_data="h_compliance"),
+    )
     # Reports
     kb.add(
         InlineKeyboardButton("📄 PDF Report", callback_data="h_report"),
@@ -62,10 +74,10 @@ def menu_text():
     return (
         "🤖 *Cyber-Volt SOC Master v3.0*\n\n"
         "Choose a category:\n\n"
-        "🛡 *Threat Intel*   — IP / Domain reconnaissance\n"
+        "🛡 *Threat Intel*   — IP / Domain, Tor, Proxy, CT, Phone\n"
         "🕸 *Network*        — Fast / Full nmap scan\n"
         "📊 *Monitoring*     — Status, Top, Logs\n"
-        "🔐 *Security*       — Audit, FIM, CVE, HIBP, MITRE\n"
+        "🔐 *Security*       — Audit, CIS, Firewall, FIM, CVE\n"
         "📄 *Reports*        — PDF report generator\n\n"
         "💡 *Tip:* just send an IP or domain\ninto the chat — the bot auto-hunts it!"
     )

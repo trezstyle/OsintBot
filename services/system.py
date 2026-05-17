@@ -1,5 +1,6 @@
 """System status, audit, log-analysis, and CVE helpers."""
 import os
+from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -317,3 +318,237 @@ def format_bandwidth():
     except Exception as e:
         log.error(f"format_bandwidth error: {e}")
         return f"Bandwidth check failed: {e}"
+
+
+def _run_cmd(args, timeout=5):
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def format_firewall(action: str = None, args: str = None) -> str:
+    action = (action or "status").strip().lower()
+    args = (args or "").strip()
+    try:
+        if action in ("", "status"):
+            result = _run_cmd(["ufw", "status", "numbered"], timeout=5)
+            output = (result.stdout or result.stderr or "No ufw output.").strip()
+            return f"🛡 *Firewall Status*\n```\n{output}\n```"
+
+        if action == "confirm":
+            parts = args.split(maxsplit=1)
+            if not parts:
+                return "Usage: `/fw confirm allow 22/tcp` or `/fw confirm deny 1.2.3.4`"
+            real_action = parts[0].lower()
+            real_arg = parts[1].strip() if len(parts) > 1 else ""
+            if real_action not in ("allow", "deny", "delete") or not real_arg:
+                return "Usage: `/fw confirm [allow|deny|delete] <port|ip|rule>`"
+
+            active_status = _run_cmd(["ufw", "status"], timeout=5)
+            active = "Status: active" in active_status.stdout
+            result = _run_cmd(["ufw", "--force", real_action, real_arg], timeout=10)
+            output = (result.stdout or result.stderr or "No ufw output.").strip()
+            prefix = "✅" if result.returncode == 0 else "🔴"
+            inactive_note = "\n⚠️ UFW was not active before this command." if not active else ""
+            return (
+                f"{prefix} *Firewall command executed*\n"
+                f"`ufw {real_action} {real_arg}`{inactive_note}\n"
+                f"```\n{output}\n```"
+            )
+
+        if action in ("allow", "deny", "delete"):
+            if not args:
+                return f"Usage: `/fw {action} <port|ip|rule>`"
+            return (
+                "⚠️ *WARNING: Firewall modification requested*\n"
+                f"`ufw {action} {args}`\n"
+                f"To confirm, use: `/fw confirm {action} {args}`"
+            )
+
+        return "Usage: `/fw [status|allow|deny|delete|confirm] [args]`"
+    except Exception as e:
+        log.error(f"format_firewall({action}, {args}) error: {e}")
+        return f"Firewall manager failed: {e}"
+
+
+def _read_file(path):
+    try:
+        return Path(path).read_text(errors="ignore")
+    except Exception:
+        return ""
+
+
+def _ssh_effective_value(config, key):
+    value = None
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s+(\S+)", re.IGNORECASE)
+    for line in config.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = pattern.match(line)
+        if match:
+            value = match.group(1)
+    return value
+
+
+def _compliance_status(ok, name, detail="", warn=False):
+    if warn:
+        return ("WARN", name, detail)
+    return ("PASS" if ok else "FAIL", name, detail)
+
+
+def format_compliance() -> str:
+    try:
+        checks = []
+        ssh_cfg = _read_file(settings.paths.sshd_config_file)
+
+        try:
+            root_login = (_ssh_effective_value(ssh_cfg, "PermitRootLogin") or "").lower()
+            checks.append(_compliance_status(root_login in ("no", "prohibit-password"), "Root SSH login", root_login or "default"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "Root SSH login", str(e), warn=True))
+
+        try:
+            protocol = _ssh_effective_value(ssh_cfg, "Protocol")
+            checks.append(_compliance_status(protocol in (None, "2"), "SSH protocol", protocol or "default 2"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "SSH protocol", str(e), warn=True))
+
+        try:
+            login_defs = _read_file("/etc/login.defs")
+            max_days = None
+            for line in login_defs.splitlines():
+                if line.strip().startswith("PASS_MAX_DAYS"):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        max_days = int(parts[1])
+            checks.append(_compliance_status(max_days is not None and max_days <= 90, "Password expiration", f"PASS_MAX_DAYS={max_days or 'unset'}"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "Password expiration", str(e), warn=True))
+
+        try:
+            common_password = _read_file("/etc/pam.d/common-password")
+            login_defs = _read_file("/etc/login.defs")
+            minlen_values = [int(m.group(1)) for m in re.finditer(r"minlen=(\d+)", common_password)]
+            pass_min_len = None
+            for line in login_defs.splitlines():
+                if line.strip().startswith("PASS_MIN_LEN"):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        pass_min_len = int(parts[1])
+            ok = any(v >= 8 for v in minlen_values) or pass_min_len is None or pass_min_len >= 8
+            detail = f"minlen={max(minlen_values) if minlen_values else 'unset'}, PASS_MIN_LEN={pass_min_len or 'unset'}"
+            checks.append(_compliance_status(ok, "Min password length", detail))
+        except Exception as e:
+            checks.append(_compliance_status(False, "Min password length", str(e), warn=True))
+
+        try:
+            ufw = _run_cmd(["ufw", "status"], timeout=5).stdout
+            checks.append(_compliance_status("Status: active" in ufw, "UFW firewall", "active" if "Status: active" in ufw else "inactive"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "UFW firewall", str(e), warn=True))
+
+        try:
+            expected_ports = {"22", "80", "443", "51820"}
+            ss = _run_cmd(["ss", "-tuln"], timeout=5).stdout.splitlines()
+            open_ports = set()
+            for line in ss:
+                if "LISTEN" not in line and "udp" not in line.lower():
+                    continue
+                parts = line.split()
+                local = parts[4] if len(parts) > 4 else ""
+                match = re.search(r":(\d+)$", local)
+                if match:
+                    open_ports.add(match.group(1))
+            unexpected = sorted(open_ports - expected_ports, key=int)
+            checks.append(_compliance_status(not unexpected, "Open ports", f"unexpected={', '.join(unexpected) if unexpected else 'none'}"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "Open ports", str(e), warn=True))
+
+        try:
+            result = _run_cmd(["journalctl", "--since", "24 hours ago", "--no-pager"], timeout=8)
+            auth_text = result.stdout if result.returncode == 0 else "\n".join(auth_log_lines()[-500:])
+            failed = len([line for line in auth_text.splitlines() if "Failed password" in line])
+            checks.append(_compliance_status(failed == 0, "Failed logins", f"{failed} in last 24h" if result.returncode == 0 else f"{failed} recent auth lines", warn=failed > 0))
+        except Exception as e:
+            checks.append(_compliance_status(False, "Failed logins", str(e), warn=True))
+
+        try:
+            import resource
+
+            limits = _read_file("/etc/security/limits.conf")
+            core_soft, _ = resource.getrlimit(resource.RLIMIT_CORE)
+            core_limit = "unlimited" if core_soft == resource.RLIM_INFINITY else str(core_soft)
+            limits_ok = any(re.match(r"\*\s+hard\s+core\s+0\b", line.strip()) for line in limits.splitlines() if not line.strip().startswith("#"))
+            checks.append(_compliance_status(limits_ok or core_limit == "0", "Core dumps", f"ulimit={core_limit or 'unknown'}"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "Core dumps", str(e), warn=True))
+
+        try:
+            ip_forward = _run_cmd(["sysctl", "-n", "net.ipv4.ip_forward"], timeout=5).stdout.strip()
+            checks.append(_compliance_status(ip_forward == "0", "IP forwarding disabled", f"net.ipv4.ip_forward={ip_forward or 'unknown'}"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "IP forwarding disabled", str(e), warn=True))
+
+        try:
+            mounts = _read_file("/proc/mounts")
+            tmp_line = next((line for line in mounts.splitlines() if " /tmp " in line), "")
+            noexec = "noexec" in tmp_line.split()[3].split(",") if tmp_line else False
+            checks.append(_compliance_status(noexec, "/tmp noexec", "noexec" if noexec else "not set"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "/tmp noexec", str(e), warn=True))
+
+        try:
+            apparmor_enabled = _read_file("/sys/module/apparmor/parameters/enabled").strip().upper()
+            if not apparmor_enabled:
+                aa = _run_cmd(["aa-status"], timeout=5)
+                apparmor_enabled = "Y" if aa.returncode == 0 else "N"
+            checks.append(_compliance_status(apparmor_enabled.startswith("Y"), "AppArmor enabled", apparmor_enabled or "unknown"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "AppArmor enabled", str(e), warn=True))
+
+        try:
+            active = _run_cmd(["systemctl", "is-active", "auditd"], timeout=5).stdout.strip()
+            installed = shutil.which("auditd") or Path("/sbin/auditd").exists() or Path("/usr/sbin/auditd").exists()
+            checks.append(_compliance_status(installed and active == "active", "Auditd installed and running", f"installed={bool(installed)}, active={active or 'unknown'}"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "Auditd installed and running", str(e), warn=True))
+
+        try:
+            syncookies = _run_cmd(["sysctl", "-n", "net.ipv4.tcp_syncookies"], timeout=5).stdout.strip()
+            checks.append(_compliance_status(syncookies == "1", "Kernel hardening", f"tcp_syncookies={syncookies or 'unknown'}"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "Kernel hardening", str(e), warn=True))
+
+        try:
+            passwd = _read_file("/etc/passwd")
+            risky = []
+            for line in passwd.splitlines():
+                parts = line.split(":")
+                if len(parts) >= 7 and parts[0] in {"games", "nobody"}:
+                    shell = parts[6]
+                    if shell not in {"/usr/sbin/nologin", "/sbin/nologin", "/bin/false"}:
+                        risky.append(parts[0])
+            checks.append(_compliance_status(not risky, "Unnecessary accounts", f"shell access={', '.join(risky) if risky else 'none'}"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "Unnecessary accounts", str(e), warn=True))
+
+        try:
+            max_auth = _ssh_effective_value(ssh_cfg, "MaxAuthTries")
+            max_auth_int = int(max_auth) if max_auth and max_auth.isdigit() else 6
+            checks.append(_compliance_status(max_auth_int <= 4, "SSH max auth tries", f"MaxAuthTries={max_auth_int}"))
+        except Exception as e:
+            checks.append(_compliance_status(False, "SSH max auth tries", str(e), warn=True))
+
+        passed = sum(1 for status, _, _ in checks if status == "PASS")
+        total = len(checks)
+        score = int((passed / total) * 100) if total else 0
+        emoji = {"PASS": "✅", "FAIL": "❌", "WARN": "⚠️"}
+        lines = [
+            "🛡 *CIS Benchmark Compliance*",
+            f"Score: `{score}%` ({passed}/{total})",
+            "",
+        ]
+        lines.extend(f"{emoji[status]} {name}: `{status}` - {detail}" for status, name, detail in checks)
+        return "\n".join(lines)
+    except Exception as e:
+        log.error(f"format_compliance error: {e}")
+        return f"Compliance check failed: {e}"

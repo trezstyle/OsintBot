@@ -26,6 +26,12 @@ Designed for cybersecurity analysts, penetration testers, and system administrat
 | `/bl` | ⚫ DNSBL blacklist check |
 | `/bandwidth` | 🌐 Network bandwidth by interface |
 | `/email` | 📧 Email OSINT report |
+| `/tor` | 🔍 Tor exit node check |
+| `/proxy` | 🌐 Proxy/VPN and hosting check |
+| `/ctlogs` | 📜 Certificate Transparency log summary |
+| `/phone` | 📞 Phone number OSINT |
+| `/fw` | 🛡 UFW firewall status and confirmed changes |
+| `/compliance` | ✅ CIS compliance check |
 | `/mitre` | 🧬 MITRE ATT&CK technique search |
 | `/report` | 📄 Generate PDF report |
 | `/alerts` | 🚨 Suricata IDS alerts |
@@ -36,10 +42,10 @@ All functions available as clickable buttons in the `/help` menu:
 
 | Category | Buttons |
 |----------|---------|
-| 🛡 Threat Intel | IP Threat Hunt, Domain Recon |
+| 🛡 Threat Intel | IP Threat Hunt, Domain Recon, Tor Check, Proxy Check, CT Logs, Phone OSINT |
 | 🕸 Network | Fast Scan, Full Scan, Blacklist |
 | 📊 Monitoring | System Status, Top Processes, Logs, Bandwidth |
-| 🔐 Security | BSI Audit, FIM Monitor, CVE, HIBP, MITRE, SSL Check, HTTP Headers, Email OSINT |
+| 🔐 Security | BSI Audit, CIS Compliance, Firewall, FIM Monitor, CVE, HIBP, MITRE, SSL Check, HTTP Headers, Email OSINT |
 | 🚨 Alerts | Suricata Alerts |
 | 📄 Reports | PDF Report |
 
@@ -202,6 +208,10 @@ Paid API key (~$3.50/month) enables full email search.
 - **crt.sh** — Subdomain enumeration
 - **DNSBL Blacklist Check** — Spamhaus, Barracuda, SpamCop, SORBS, AbuseAT CBL
 - **Email OSINT** — MX, Gravatar, SPF, DMARC, HIBP report
+- **Tor Check** — DNS and bulk-list Tor exit node detection
+- **Proxy/VPN Check** — ip-api.com proxy, hosting, ISP, and ASN enrichment
+- **Certificate Transparency Logs** — crt.sh issuer, subdomain, expiry, and age summary
+- **Phone OSINT** — Number validity, country, carrier, timezone, and formatting
 - **Brute Force Alerts** — Real-time auth.log monitoring
 
 ## 🕸 Network Scanner
@@ -233,6 +243,8 @@ Paid API key (~$3.50/month) enables full email search.
 - **MITRE ATT&CK** — Technique lookup by T-ID
 - **SSL Check** — Certificate subject, issuer, SAN count, and expiry status
 - **HTTP Headers** — Security header scoring for HSTS, CSP, frame, content-type, referrer, and permissions policy
+- **Firewall Manager** — UFW status and double-confirmed allow/deny/delete changes
+- **CIS Compliance Check** — 15 automated host security checks with PASS/FAIL/WARN score
 
 ## 📄 Reports
 - **PDF Report** — System status, top processes, failed logins, compliance audit

@@ -72,6 +72,9 @@ def set_commands():
         ("ssl", "🔒 SSL certificate check"), ("httpcheck", "🛡 HTTP security headers check"),
         ("bl", "⚫ DNSBL blacklist check"), ("bandwidth", "🌐 Network bandwidth by interface"),
         ("email", "📧 Email OSINT report"),
+        ("tor", "🔍 Tor exit node check"), ("proxy", "🌐 Proxy/VPN and hosting check"),
+        ("ctlogs", "📜 Certificate Transparency log summary"), ("phone", "📞 Phone number OSINT"),
+        ("fw", "🛡 UFW firewall status and confirmed changes"), ("compliance", "✅ CIS compliance check"),
         ("mitre", "🧬 MITRE ATT&CK technique search"), ("report", "📄 Generate PDF report"),
         ("alerts", "🚨 View Suricata IDS alerts"),
     ]

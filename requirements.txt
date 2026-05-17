@@ -1,6 +1,7 @@
 pyTelegramBotAPI
 python-dotenv
 psutil
+phonenumbers
 python-whois
 requests
 reportlab

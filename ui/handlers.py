@@ -11,8 +11,8 @@ from config import settings
 from services.fim import fim_add, fim_check
 from services.reporting import generate_report
 from services.scanner import scan_network
-from services.system import analyze_logs, check_cve, format_audit, format_bandwidth, format_status, format_top
-from services.threat_intel import check_blacklist, check_email, check_hibp, check_http_headers, check_ssl, get_whois, mitre_lookup, threat_hunt_domain, threat_hunt_ip
+from services.system import analyze_logs, check_cve, format_audit, format_bandwidth, format_compliance, format_firewall, format_status, format_top
+from services.threat_intel import check_blacklist, check_ctlogs, check_email, check_hibp, check_http_headers, check_phone, check_proxy, check_ssl, check_tor, get_whois, mitre_lookup, threat_hunt_domain, threat_hunt_ip
 from ui.keyboards import fim_keyboard, help_keyboard, logs_keyboard, menu_text, scan_keyboard
 from watchers import suricata_alerts, suricata_lock
 
@@ -72,7 +72,7 @@ def cmd_help(m):
     global ALERT_CHAT_ID
     with ALERT_LOCK: ALERT_CHAT_ID = m.chat.id
     bot.reply_to(m, menu_text(), parse_mode="Markdown", reply_markup=help_keyboard())
-@bot.message_handler(commands=["status", "top", "logs", "audit", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth", "email"])
+@bot.message_handler(commands=["status", "top", "logs", "audit", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth", "email", "tor", "proxy", "ctlogs", "phone", "fw", "compliance"])
 def cmd_handler(m):
     if not is_message_authorized(m): return
     global ALERT_CHAT_ID
@@ -134,6 +134,24 @@ def cmd_handler(m):
         elif cmd == "email":
             if args: bot.reply_to(m, check_email(args[0]), parse_mode="Markdown")
             else: bot.register_next_step_handler(bot.reply_to(m, "📧 *Enter email address for OSINT:*", parse_mode="Markdown"), process_email)
+        elif cmd == "tor":
+            if args: bot.reply_to(m, check_tor(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "🔍 *Enter IP address for Tor check:*", parse_mode="Markdown"), process_tor)
+        elif cmd == "proxy":
+            if args: bot.reply_to(m, check_proxy(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "🌐 *Enter IP address for Proxy/VPN check:*", parse_mode="Markdown"), process_proxy)
+        elif cmd == "ctlogs":
+            if args: bot.reply_to(m, check_ctlogs(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "📜 *Enter domain for CT logs:*", parse_mode="Markdown"), process_ctlogs)
+        elif cmd == "phone":
+            if args: bot.reply_to(m, check_phone(args[0]), parse_mode="Markdown")
+            else: bot.register_next_step_handler(bot.reply_to(m, "📞 *Enter phone number:*\nExample: `+491234567`", parse_mode="Markdown"), process_phone)
+        elif cmd == "fw":
+            action = args[0] if args else "status"
+            fw_args = " ".join(args[1:]) if len(args) > 1 else ""
+            bot.reply_to(m, format_firewall(action, fw_args), parse_mode="Markdown")
+        elif cmd == "compliance":
+            bot.reply_to(m, format_compliance(), parse_mode="Markdown")
         elif cmd == "mitre":
             if args: bot.reply_to(m, mitre_lookup(args[0]), parse_mode="Markdown")
             else: bot.register_next_step_handler(bot.reply_to(m, "🧬 *Enter technique ID:*\nExample: `T1059`", parse_mode="Markdown"), process_mitre)
@@ -242,12 +260,26 @@ def handle_callback(call):
         elif cmd == "email":
             msg = bot.send_message(cid, "📧 *Enter email address for OSINT:*", parse_mode="Markdown")
             bot.register_next_step_handler(msg, process_email)
+        elif cmd == "tor":
+            msg = bot.send_message(cid, "🔍 *Enter IP address for Tor check:*", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_tor)
+        elif cmd == "proxy":
+            msg = bot.send_message(cid, "🌐 *Enter IP address for Proxy/VPN check:*", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_proxy)
+        elif cmd == "ctlogs":
+            msg = bot.send_message(cid, "📜 *Enter domain for CT logs:*", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_ctlogs)
+        elif cmd == "phone":
+            msg = bot.send_message(cid, "📞 *Enter phone number:*\nExample: `+491234567`", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_phone)
 
         # ── System ──
         elif cmd == "status": bot.send_message(cid, format_status(), parse_mode="Markdown")
         elif cmd == "top": bot.send_message(cid, format_top(), parse_mode="Markdown")
         elif cmd == "bandwidth": bot.send_message(cid, format_bandwidth(), parse_mode="Markdown")
         elif cmd == "audit": bot.send_message(cid, format_audit(), parse_mode="Markdown")
+        elif cmd == "fw": bot.send_message(cid, format_firewall(), parse_mode="Markdown")
+        elif cmd == "compliance": bot.send_message(cid, format_compliance(), parse_mode="Markdown")
 
         # ── Report / Alerts ──
         elif cmd == "report":
@@ -351,6 +383,33 @@ def process_email(m):
     if not e: bot.reply_to(m, "❌ No email entered."); return
     bot.reply_to(m, f"📧 *Running Email OSINT for `{e}`...*", parse_mode="Markdown")
     bot.reply_to(m, check_email(e), parse_mode="Markdown")
+def process_tor(m):
+    if not is_message_authorized(m): return
+    with ALERT_LOCK: global ALERT_CHAT_ID; ALERT_CHAT_ID = m.chat.id
+    ip = m.text.strip()
+    if not ip: bot.reply_to(m, "❌ No IP entered."); return
+    bot.reply_to(m, f"🔍 *Checking Tor exit status for `{ip}`...*", parse_mode="Markdown")
+    bot.reply_to(m, check_tor(ip), parse_mode="Markdown")
+def process_proxy(m):
+    if not is_message_authorized(m): return
+    with ALERT_LOCK: global ALERT_CHAT_ID; ALERT_CHAT_ID = m.chat.id
+    ip = m.text.strip()
+    if not ip: bot.reply_to(m, "❌ No IP entered."); return
+    bot.reply_to(m, f"🌐 *Checking Proxy/VPN status for `{ip}`...*", parse_mode="Markdown")
+    bot.reply_to(m, check_proxy(ip), parse_mode="Markdown")
+def process_ctlogs(m):
+    if not is_message_authorized(m): return
+    with ALERT_LOCK: global ALERT_CHAT_ID; ALERT_CHAT_ID = m.chat.id
+    d = m.text.strip()
+    if not d: bot.reply_to(m, "❌ No domain entered."); return
+    bot.reply_to(m, f"📜 *Checking CT logs for `{d}`...*", parse_mode="Markdown")
+    bot.reply_to(m, check_ctlogs(d), parse_mode="Markdown")
+def process_phone(m):
+    if not is_message_authorized(m): return
+    with ALERT_LOCK: global ALERT_CHAT_ID; ALERT_CHAT_ID = m.chat.id
+    p = m.text.strip()
+    if not p: bot.reply_to(m, "❌ No phone number entered."); return
+    bot.reply_to(m, check_phone(p), parse_mode="Markdown")
 def process_mitre(m):
     if not is_message_authorized(m): return
     t = m.text.strip()
