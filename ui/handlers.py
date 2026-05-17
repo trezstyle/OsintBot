@@ -31,7 +31,7 @@ MAX_MSG_LEN = 4096
 
 def send_long_message(chat_id, text, parse_mode=None, reply_markup=None):
     if len(text) <= MAX_MSG_LEN:
-        bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+        return bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
     else:
         parts = []
         while text:
@@ -43,8 +43,11 @@ def send_long_message(chat_id, text, parse_mode=None, reply_markup=None):
                 split_at = MAX_MSG_LEN
             parts.append(text[:split_at])
             text = text[split_at:]
+        msg = None
         for i, part in enumerate(parts):
-            bot.send_message(chat_id, part, parse_mode=parse_mode)
+            markup = reply_markup if i == len(parts) - 1 else None
+            msg = bot.send_message(chat_id, part, parse_mode=parse_mode, reply_markup=markup)
+        return msg
 
 
 # ── Authorization decorator ──
@@ -343,7 +346,7 @@ def handle_callback(call):
             text = format_top(sort)
             kb = top_keyboard(sort)
             try:
-                bot.edit_message_text(text, cid, call.message.id, parse_mode="Markdown", reply_markup=kb)
+                bot.edit_message_text(text, cid, call.message.message_id, parse_mode="Markdown", reply_markup=kb)
             except Exception:
                 send_long_message(cid, text, parse_mode="Markdown", reply_markup=kb)
         elif cmd == "bandwidth": send_long_message(cid, format_bandwidth(), parse_mode="Markdown")
