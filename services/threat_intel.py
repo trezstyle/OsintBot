@@ -549,54 +549,18 @@ def check_phone(phone: str) -> str:
         return re.sub(r"\s+", " ", value).strip()
 
     def check_telegram(plus_number: str, digits: str) -> str:
-        urls = [f"https://t.me/{plus_number}", f"https://t.me/{digits}"]
-        blocked_markers = ("cloudflare", "cf-ray", "checking your browser", "attention required")
-        found_markers = (
-            "if you have telegram, you can contact",
-            "send message",
-            "tgme_page",
-            "tgme_action_button",
-            "telegram contact",
-        )
-        missing_markers = (
-            "username is not available",
-            "user not found",
-            "this channel can't be displayed",
-            "invite link is invalid",
-        )
-
-        for url in urls:
-            try:
-                r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
-                body = r.text.lower()
-                if r.status_code in (403, 429) or any(marker in body for marker in blocked_markers):
-                    return "⚠ Blocked or rate-limited by Telegram/Cloudflare"
-                if r.status_code == 200 and any(marker in body for marker in found_markers):
-                    if not any(marker in body for marker in missing_markers):
-                        return f"✅ User/profile page found: {url}"
-                if r.history and r.status_code == 200 and not any(marker in body for marker in missing_markers):
-                    return f"✅ Redirect/profile response: {url}"
-            except Exception as e:
-                log.warning(f"check_phone Telegram source failed for {plus_number}: {e}")
-        return f"❌ Not confirmed. Manual check: https://t.me/{plus_number}"
+        """
+        Note: t.me/+ links ALWAYS return a landing page for any valid phone format.
+        Telegram does NOT expose a public API to verify phone number existence.
+        """
+        return "⚠ Cannot verify via HTTP (t.me/+ links always work for any number format — actual existence requires contacting)"
 
     def check_whatsapp(digits: str) -> str:
-        url = f"https://wa.me/{digits}"
-        found_markers = ("continue to chat", "use whatsapp", "whatsapp web", "send a message")
-        missing_markers = ("phone number shared via url is invalid", "invalid phone number")
-        try:
-            r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
-            body = r.text.lower()
-            if r.status_code in (403, 429):
-                return f"⚠ Blocked or rate-limited. Manual check: {url}"
-            if any(marker in body for marker in missing_markers):
-                return f"❌ Invalid/not found by WhatsApp page: {url}"
-            if r.status_code == 200 and (r.history or any(marker in body for marker in found_markers)):
-                return f"✅ WhatsApp page responds: {url}"
-            return f"⚠ Check manually: {url}"
-        except Exception as e:
-            log.warning(f"check_phone WhatsApp source failed for {digits}: {e}")
-            return f"⚠ Check failed. Manual check: {url}"
+        """
+        Note: wa.me ALWAYS returns a page for any valid phone format.
+        WhatsApp does NOT expose a public API to verify phone number existence.
+        """
+        return "⚠ Cannot verify via HTTP (wa.me always responds — WhatsApp requires sending a message to confirm)"
 
     def check_duckduckgo(plus_number: str, international: str) -> dict:
         queries = [plus_number, international]
