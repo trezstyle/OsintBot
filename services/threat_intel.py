@@ -7,6 +7,7 @@ import re
 import socket
 import ssl
 import subprocess
+from urllib.parse import quote_plus
 
 import requests
 import whois
@@ -527,30 +528,231 @@ def check_ctlogs(domain: str) -> str:
 
 
 def check_phone(phone: str) -> str:
-    phone = phone.strip()
+    raw_phone = phone.strip()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    def strip_html(value: str) -> str:
+        value = re.sub(r"<script\b[^>]*>.*?</script>", " ", value, flags=re.I | re.S)
+        value = re.sub(r"<style\b[^>]*>.*?</style>", " ", value, flags=re.I | re.S)
+        value = re.sub(r"<[^>]+>", " ", value)
+        value = re.sub(r"&quot;|&#34;", '"', value)
+        value = re.sub(r"&amp;", "&", value)
+        value = re.sub(r"&nbsp;|&#160;", " ", value)
+        return re.sub(r"\s+", " ", value).strip()
+
+    def check_telegram(plus_number: str, digits: str) -> str:
+        urls = [f"https://t.me/{plus_number}", f"https://t.me/{digits}"]
+        blocked_markers = ("cloudflare", "cf-ray", "checking your browser", "attention required")
+        found_markers = (
+            "if you have telegram, you can contact",
+            "send message",
+            "tgme_page",
+            "tgme_action_button",
+            "telegram contact",
+        )
+        missing_markers = (
+            "username is not available",
+            "user not found",
+            "this channel can't be displayed",
+            "invite link is invalid",
+        )
+
+        for url in urls:
+            try:
+                r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+                body = r.text.lower()
+                if r.status_code in (403, 429) or any(marker in body for marker in blocked_markers):
+                    return "⚠ Blocked or rate-limited by Telegram/Cloudflare"
+                if r.status_code == 200 and any(marker in body for marker in found_markers):
+                    if not any(marker in body for marker in missing_markers):
+                        return f"✅ User/profile page found: {url}"
+                if r.history and r.status_code == 200 and not any(marker in body for marker in missing_markers):
+                    return f"✅ Redirect/profile response: {url}"
+            except Exception as e:
+                log.warning(f"check_phone Telegram source failed for {plus_number}: {e}")
+        return f"❌ Not confirmed. Manual check: https://t.me/{plus_number}"
+
+    def check_whatsapp(digits: str) -> str:
+        url = f"https://wa.me/{digits}"
+        found_markers = ("continue to chat", "use whatsapp", "whatsapp web", "send a message")
+        missing_markers = ("phone number shared via url is invalid", "invalid phone number")
+        try:
+            r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+            body = r.text.lower()
+            if r.status_code in (403, 429):
+                return f"⚠ Blocked or rate-limited. Manual check: {url}"
+            if any(marker in body for marker in missing_markers):
+                return f"❌ Invalid/not found by WhatsApp page: {url}"
+            if r.status_code == 200 and (r.history or any(marker in body for marker in found_markers)):
+                return f"✅ WhatsApp page responds: {url}"
+            return f"⚠ Check manually: {url}"
+        except Exception as e:
+            log.warning(f"check_phone WhatsApp source failed for {digits}: {e}")
+            return f"⚠ Check failed. Manual check: {url}"
+
+    def check_duckduckgo(plus_number: str, international: str) -> dict:
+        queries = [plus_number, international]
+        seen = set()
+        matches = []
+        result_count = 0
+
+        for query in queries:
+            quoted_query = quote_plus(f'"{query}"')
+            url = f"https://html.duckduckgo.com/html/?q={quoted_query}"
+            try:
+                r = requests.get(url, headers=headers, timeout=10)
+                if r.status_code in (403, 429):
+                    return {"status": "blocked", "count": result_count, "matches": matches}
+                if r.status_code != 200:
+                    log.warning(f"check_phone DuckDuckGo HTTP {r.status_code} for {plus_number}")
+                    continue
+
+                result_count += len(re.findall(r'class="result__a"', r.text))
+                result_blocks = re.findall(
+                    r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                    r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>',
+                    r.text,
+                    flags=re.I | re.S,
+                )
+                if not result_blocks:
+                    result_blocks = re.findall(
+                        r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+                        r.text,
+                        flags=re.I | re.S,
+                    )
+
+                for block in result_blocks:
+                    href = block[0]
+                    title = strip_html(block[1])
+                    snippet = strip_html(block[2]) if len(block) > 2 else ""
+                    key = (href, title)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    matches.append({"url": href, "title": title, "snippet": snippet})
+                    if len(matches) >= 3:
+                        break
+                if len(matches) >= 3:
+                    break
+            except Exception as e:
+                log.warning(f"check_phone DuckDuckGo source failed for {plus_number}: {e}")
+
+        return {"status": "ok", "count": result_count, "matches": matches}
+
+    def check_breaches(digits: str) -> str:
+        url = f"https://api.xposedornot.com/v1/phone/{digits}"
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 404:
+                return "No public breach data found via XposedOrNot"
+            if r.status_code in (401, 403):
+                return "⚠ XposedOrNot phone lookup unavailable/blocked; most phone breach databases require paid API access"
+            if r.status_code == 429:
+                return "⚠ XposedOrNot rate-limited the lookup"
+            if r.status_code != 200:
+                log.warning(f"check_phone breach source HTTP {r.status_code} for {digits}")
+                return "⚠ Breach lookup inconclusive; phone breach databases are limited"
+
+            data = r.json()
+            breaches = data.get("breaches") or data.get("Breaches") or data.get("exposed_breaches") or []
+            if isinstance(breaches, dict):
+                breaches = breaches.get("breaches_details") or breaches.get("details") or list(breaches.values())
+            if breaches:
+                names = []
+                for item in breaches[:5]:
+                    if isinstance(item, dict):
+                        names.append(item.get("breach") or item.get("name") or item.get("title") or "Unknown breach")
+                    else:
+                        names.append(str(item))
+                suffix = f" and {len(breaches) - 5} more" if len(breaches) > 5 else ""
+                return f"⚠ Found in breach data: {', '.join(names)}{suffix}"
+            return "No public breach data found via XposedOrNot"
+        except Exception as e:
+            log.warning(f"check_phone breach source failed for {digits}: {e}")
+            return "⚠ Breach lookup failed; phone breach databases are limited and often require paid API access"
+
     try:
         import phonenumbers
         from phonenumbers import carrier, geocoder, timezone
 
-        num = phonenumbers.parse(phone, None)
-        if not phonenumbers.is_possible_number(num):
-            return f"📞 *Phone OSINT: `{phone}`*\nInvalid number"
+        try:
+            num = phonenumbers.parse(raw_phone, None)
+        except Exception:
+            digits_only = re.sub(r"\D+", "", raw_phone)
+            if not digits_only:
+                raise
+            num = phonenumbers.parse(f"+{digits_only}", None)
 
+        possible = phonenumbers.is_possible_number(num)
         valid = phonenumbers.is_valid_number(num)
+        international = phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+        national = phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.NATIONAL)
+        plus_number = phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.E164)
+        digits = re.sub(r"\D+", "", plus_number)
+
+        if not possible:
+            return f"📞 *Phone OSINT: `{raw_phone}`*\nInvalid number"
+
         country = geocoder.description_for_number(num, "en") or "N/A"
         carrier_name = carrier.name_for_number(num, "en") or "N/A"
         tz = ", ".join(timezone.time_zones_for_number(num)) or "N/A"
-        national = phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.NATIONAL)
-        international = phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+
+        telegram = check_telegram(plus_number, digits)
+        whatsapp = check_whatsapp(digits)
+        web = check_duckduckgo(plus_number, international)
+        breaches = check_breaches(digits)
+
+        result_count = web["count"]
+        web_lines = ["🔎 Searching DuckDuckGo for this number..."]
+        if web["status"] == "blocked":
+            web_lines.append("• ⚠ DuckDuckGo blocked or rate-limited the request")
+        elif result_count or web["matches"]:
+            approx = f"~{result_count}" if result_count else f"{len(web['matches'])}+"
+            web_lines.append(f"• Found `{approx}` results mentioning this number")
+            for match in web["matches"][:3]:
+                title = match["title"][:90] or "Untitled result"
+                snippet = match["snippet"][:140]
+                if snippet:
+                    web_lines.append(f"• Top match: `{title}` — \"{snippet}\"")
+                else:
+                    web_lines.append(f"• Top match: `{title}` — {match['url']}")
+        else:
+            web_lines.append("• No indexed public mentions found in DuckDuckGo HTML results")
 
         return (
-            f"📞 *Phone OSINT: `{international}`*\n"
-            f"Valid: {'✅' if valid else '❌'}\n"
-            f"Country: `{country}`\n"
-            f"Carrier: `{carrier_name}`\n"
-            f"Timezone: `{tz}`\n"
-            f"National: `{national}`"
+            f"📞 *Phone OSINT: {international}*\n"
+            f"╔═══════════════════════════════════════╗\n\n"
+            f"📋 *Basic Info*\n"
+            f"• Valid: {'✅' if valid else '❌'}\n"
+            f"• Country: `{country}`\n"
+            f"• Carrier: `{carrier_name}`\n"
+            f"• Timezone: `{tz}`\n"
+            f"• National: `{national}`\n\n"
+            f"🔗 *Messaging Platforms*\n"
+            f"• Telegram: {telegram}\n"
+            f"• WhatsApp: {whatsapp}\n"
+            f"• Viber: ✅ Link available: viber://chat?number=%2B{digits}\n"
+            f"• Signal: ✅ Link available: https://signal.me/#p/{plus_number}\n"
+            f"• Snapchat: ❌ Not searchable by phone from public web\n"
+            f"• TrueCaller: ⚠ Requires app/API access\n\n"
+            f"🔎 *Known Platform Links*\n"
+            f"• Telegram: https://t.me/{plus_number}\n"
+            f"• WhatsApp: https://wa.me/{digits}\n"
+            f"• Signal: https://signal.me/#p/{plus_number}\n"
+            f"• Viber: viber://chat?number=%2B{digits}\n\n"
+            f"🌐 *Web Presence*\n"
+            f"{chr(10).join(web_lines)}\n\n"
+            f"🔐 *Breach Data*\n"
+            f"• {breaches}"
         )
     except Exception as e:
-        log.error(f"check_phone({phone}) error: {e}")
-        return f"Phone parse failed: {e}"
+        log.error(f"check_phone({raw_phone}) error: {e}")
+        return f"Phone OSINT failed: {e}"
