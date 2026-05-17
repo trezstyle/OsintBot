@@ -2,8 +2,6 @@
 import logging
 from functools import wraps
 from pathlib import Path
-import re
-import threading
 
 import telebot
 
@@ -25,6 +23,64 @@ UNAUTHORIZED_TEXT = settings.unauthorized_text
 bot = telebot.TeleBot(settings.api.telegram_token)
 
 MAX_MSG_LEN = 4096
+
+_CMD_TABLE = {
+    "ssl": {
+        "fn": check_ssl,
+        "prompt": "🔒 *Enter domain for SSL check:*",
+        "validate": "validate_domain",
+        "success_msg": "🔒 *Checking SSL for `{arg}`...*",
+    },
+    "httpcheck": {
+        "fn": check_http_headers,
+        "prompt": "🛡 *Enter domain or URL for HTTP header check:*",
+        "validate": "validate_domain",
+        "validate_transform": lambda a: a.replace("https://", "").replace("http://", "").split("/")[0] if a else a,
+        "success_msg": "🛡 *Checking HTTP headers for `{arg}`...*",
+    },
+    "bl": {
+        "fn": check_blacklist,
+        "prompt": "⚫ *Enter IP address for blacklist check:*",
+        "validate": "validate_ip",
+        "success_msg": "⚫ *Checking DNSBLs for `{arg}`...*",
+    },
+    "email": {
+        "fn": check_email,
+        "prompt": "📧 *Enter email address for OSINT:*",
+        "validate": None,
+        "success_msg": "📧 *Running Email OSINT for `{arg}`...*",
+    },
+    "tor": {
+        "fn": check_tor,
+        "prompt": "🔍 *Enter IP address for Tor check:*",
+        "validate": "validate_ip",
+        "success_msg": "🔍 *Checking Tor exit status for `{arg}`...*",
+    },
+    "proxy": {
+        "fn": check_proxy,
+        "prompt": "🌐 *Enter IP address for Proxy/VPN check:*",
+        "validate": "validate_ip",
+        "success_msg": "🌐 *Checking Proxy/VPN status for `{arg}`...*",
+    },
+    "ctlogs": {
+        "fn": check_ctlogs,
+        "prompt": "📜 *Enter domain for CT logs:*",
+        "validate": "validate_domain",
+        "success_msg": "📜 *Checking CT logs for `{arg}`...*",
+    },
+    "phone": {
+        "fn": check_phone,
+        "prompt": "📞 *Enter phone number:*\nExample: `+491234567`",
+        "validate": None,
+        "success_msg": None,
+    },
+    "whois": {
+        "fn": get_whois,
+        "prompt": "🕵️ *Enter a domain for WHOIS:*",
+        "validate": "validate_domain",
+        "success_msg": None,
+    },
+}
 
 
 # ── Message length helper ──
@@ -132,15 +188,6 @@ def cmd_handler(m):
             else:
                 kb = logs_keyboard()
                 bot.reply_to(m, "📊 *Choose log filter:*", parse_mode="Markdown", reply_markup=kb)
-        elif cmd == "whois":
-            if args:
-                d = args[0]
-                if not security.validate_domain(d):
-                    bot.reply_to(m, "❌ Invalid domain format.")
-                else:
-                    send_long_message(m.chat.id, get_whois(d), parse_mode="Markdown")
-            else:
-                bot.register_next_step_handler(bot.reply_to(m, "🕵️ *Enter a domain for WHOIS:*", parse_mode="Markdown"), process_whois)
         elif cmd == "recon":
             if args:
                 process_domain_hunt(m)
@@ -177,46 +224,6 @@ def cmd_handler(m):
                 send_long_message(m.chat.id, check_hibp(args[0]), parse_mode="Markdown")
             else:
                 bot.register_next_step_handler(bot.reply_to(m, "🔐 *Enter email or domain:*", parse_mode="Markdown"), process_hibp)
-        elif cmd == "ssl":
-            if args:
-                send_long_message(m.chat.id, check_ssl(args[0]), parse_mode="Markdown")
-            else:
-                bot.register_next_step_handler(bot.reply_to(m, "🔒 *Enter domain for SSL check:*", parse_mode="Markdown"), process_ssl)
-        elif cmd == "httpcheck":
-            if args:
-                send_long_message(m.chat.id, check_http_headers(args[0]), parse_mode="Markdown")
-            else:
-                bot.register_next_step_handler(bot.reply_to(m, "🛡 *Enter domain or URL for HTTP header check:*", parse_mode="Markdown"), process_httpcheck)
-        elif cmd == "bl":
-            if args:
-                send_long_message(m.chat.id, check_blacklist(args[0]), parse_mode="Markdown")
-            else:
-                bot.register_next_step_handler(bot.reply_to(m, "⚫ *Enter IP address for blacklist check:*", parse_mode="Markdown"), process_bl)
-        elif cmd == "email":
-            if args:
-                send_long_message(m.chat.id, check_email(args[0]), parse_mode="Markdown")
-            else:
-                bot.register_next_step_handler(bot.reply_to(m, "📧 *Enter email address for OSINT:*", parse_mode="Markdown"), process_email)
-        elif cmd == "tor":
-            if args:
-                send_long_message(m.chat.id, check_tor(args[0]), parse_mode="Markdown")
-            else:
-                bot.register_next_step_handler(bot.reply_to(m, "🔍 *Enter IP address for Tor check:*", parse_mode="Markdown"), process_tor)
-        elif cmd == "proxy":
-            if args:
-                send_long_message(m.chat.id, check_proxy(args[0]), parse_mode="Markdown")
-            else:
-                bot.register_next_step_handler(bot.reply_to(m, "🌐 *Enter IP address for Proxy/VPN check:*", parse_mode="Markdown"), process_proxy)
-        elif cmd == "ctlogs":
-            if args:
-                send_long_message(m.chat.id, check_ctlogs(args[0]), parse_mode="Markdown")
-            else:
-                bot.register_next_step_handler(bot.reply_to(m, "📜 *Enter domain for CT logs:*", parse_mode="Markdown"), process_ctlogs)
-        elif cmd == "phone":
-            if args:
-                send_long_message(m.chat.id, check_phone(args[0]), parse_mode="Markdown")
-            else:
-                bot.register_next_step_handler(bot.reply_to(m, "📞 *Enter phone number:*\nExample: `+491234567`", parse_mode="Markdown"), process_phone)
         elif cmd == "fw":
             action = args[0] if args else "status"
             fw_args = " ".join(args[1:]) if len(args) > 1 else ""
@@ -244,6 +251,23 @@ def cmd_handler(m):
                         t = a["time"].strftime("%H:%M:%S")
                         lines.append(f"`{t}` {a['line'][:80]}")
                     send_long_message(m.chat.id, "\n".join(lines), parse_mode="Markdown")
+        elif cmd in _CMD_TABLE:
+            config = _CMD_TABLE[cmd]
+            if args:
+                arg = args[0]
+                validate_fn_name = config.get("validate")
+                if validate_fn_name:
+                    transform = config.get("validate_transform")
+                    check_arg = transform(arg) if transform else arg
+                    if not getattr(security, validate_fn_name)(check_arg):
+                        bot.reply_to(m, f"❌ Invalid input: `{arg}`")
+                        return
+                send_long_message(m.chat.id, config["fn"](arg), parse_mode="Markdown")
+            else:
+                bot.register_next_step_handler(
+                    bot.reply_to(m, config["prompt"], parse_mode="Markdown"),
+                    lambda m, c=cmd: process_from_table(m, c)
+                )
     except Exception as e:
         log.error(f"cmd_handler({cmd}): {e}")
         bot.reply_to(m, f"❌ Error: {e}")
@@ -316,30 +340,9 @@ def handle_callback(call):
         elif cmd == "mitre":
             msg = bot.send_message(cid, "🧬 *Enter MITRE technique ID:*\nExample: `T1059`", parse_mode="Markdown")
             bot.register_next_step_handler(msg, process_mitre)
-        elif cmd == "ssl":
-            msg = bot.send_message(cid, "🔒 *Enter domain for SSL check:*", parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_ssl)
-        elif cmd == "httpcheck":
-            msg = bot.send_message(cid, "🛡 *Enter domain or URL for HTTP header check:*", parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_httpcheck)
-        elif cmd == "bl":
-            msg = bot.send_message(cid, "⚫ *Enter IP address for blacklist check:*", parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_bl)
-        elif cmd == "email":
-            msg = bot.send_message(cid, "📧 *Enter email address for OSINT:*", parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_email)
-        elif cmd == "tor":
-            msg = bot.send_message(cid, "🔍 *Enter IP address for Tor check:*", parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_tor)
-        elif cmd == "proxy":
-            msg = bot.send_message(cid, "🌐 *Enter IP address for Proxy/VPN check:*", parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_proxy)
-        elif cmd == "ctlogs":
-            msg = bot.send_message(cid, "📜 *Enter domain for CT logs:*", parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_ctlogs)
-        elif cmd == "phone":
-            msg = bot.send_message(cid, "📞 *Enter phone number:*\nExample: `+491234567`", parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_phone)
+        elif cmd in _CMD_TABLE:
+            msg = bot.send_message(cid, _CMD_TABLE[cmd]["prompt"], parse_mode="Markdown")
+            bot.register_next_step_handler(msg, lambda m, c=cmd: process_from_table(m, c))
         elif cmd == "status": send_long_message(cid, format_status(), parse_mode="Markdown")
         elif cmd in ("top", "top_cpu", "top_ram", "top_pid", "top_name"):
             sort = cmd.split("_")[-1] if "_" in cmd else "cpu"
@@ -562,3 +565,25 @@ def process_whois(m):
         bot.reply_to(m, f"❌ Invalid domain: `{d}`")
         return
     send_long_message(m.chat.id, get_whois(d), parse_mode="Markdown")
+
+
+def process_from_table(m, cmd):
+    config = _CMD_TABLE.get(cmd)
+    if not config or not is_message_authorized(m):
+        return
+    _set_alert_chat_id(m.chat.id)
+    arg = m.text.strip()
+    if not arg:
+        bot.reply_to(m, "❌ Nothing entered.")
+        return
+    validate_fn_name = config.get("validate")
+    if validate_fn_name:
+        transform = config.get("validate_transform")
+        check_arg = transform(arg) if transform else arg
+        if not getattr(security, validate_fn_name)(check_arg):
+            bot.reply_to(m, f"❌ Invalid input: `{arg}`")
+            return
+    success_msg = config.get("success_msg")
+    if success_msg:
+        bot.reply_to(m, success_msg.format(arg=arg), parse_mode="Markdown")
+    send_long_message(m.chat.id, config["fn"](arg), parse_mode="Markdown")

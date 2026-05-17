@@ -1,7 +1,9 @@
 """Tests for security module."""
+import os
+import security
 import pytest
-from security import validate_ip, validate_domain, validate_hostname, validate_package_name
-from security import is_authorized, ALLOWED_USERS, ALLOWED_CHATS, AUTH_CONFIGURED
+from security import validate_ip, validate_domain, validate_hostname, validate_package_name, load_authorization
+from security import is_authorized, ALLOWED_USERS, ALLOWED_CHATS
 
 
 class TestValidateIP:
@@ -40,6 +42,12 @@ class TestValidateDomain:
         ("   ", None),
         (".com", None),
         ("a..b.com", None),
+        ("münchen.de", None),
+        ("192.168.1.1", None),
+        ("example.com.", None),
+        ("example.com:8080", None),
+        ("a" * 254 + ".com", None),
+        ("a" * 63 + "." + "b" * 63 + "." + "c" * 63 + "." + "d" * 63 + ".com", None),
         ("spaces in domain.com", None),
     ])
     def test_validate_domain(self, domain, expected):
@@ -67,6 +75,7 @@ class TestValidatePackageName:
         ("-rf", None),
         ("../etc", None),
         ("rm -rf", None),
+        ("a", "a"),
         ("a" * 129, None),
         ("", None),
     ])
@@ -80,22 +89,60 @@ class TestIsAuthorized:
         assert is_authorized(123, 456) is False
 
     def test_user_in_allowed(self):
+        saved = security.AUTH_CONFIGURED
+        security.AUTH_CONFIGURED = True
         ALLOWED_USERS.append(42)
         try:
             assert is_authorized(42, 999) is True
         finally:
             ALLOWED_USERS.clear()
+            security.AUTH_CONFIGURED = saved
 
     def test_chat_in_allowed(self):
+        saved = security.AUTH_CONFIGURED
+        security.AUTH_CONFIGURED = True
         ALLOWED_CHATS.append(-100)
         try:
             assert is_authorized(999, -100) is True
         finally:
             ALLOWED_CHATS.clear()
+            security.AUTH_CONFIGURED = saved
 
     def test_user_not_in_allowed(self):
+        saved = security.AUTH_CONFIGURED
+        security.AUTH_CONFIGURED = True
         ALLOWED_USERS.append(42)
         try:
             assert is_authorized(99, 0) is False
         finally:
             ALLOWED_USERS.clear()
+            security.AUTH_CONFIGURED = saved
+
+
+class TestLoadAuthorization:
+    def test_empty_config(self, monkeypatch):
+        monkeypatch.delenv("ALLOWED_USERS", raising=False)
+        monkeypatch.delenv("ALLOWED_CHATS", raising=False)
+        security.ALLOWED_USERS.clear()
+        security.ALLOWED_CHATS.clear()
+        load_authorization()
+        assert security.AUTH_CONFIGURED is False
+
+    def test_valid_users_comma_separated(self, monkeypatch):
+        monkeypatch.setenv("ALLOWED_USERS", "123,456")
+        monkeypatch.delenv("ALLOWED_CHATS", raising=False)
+        security.ALLOWED_USERS.clear()
+        security.ALLOWED_CHATS.clear()
+        load_authorization()
+        assert security.AUTH_CONFIGURED is True
+        assert 123 in security.ALLOWED_USERS
+        assert 456 in security.ALLOWED_USERS
+
+    def test_invalid_users_non_int(self, monkeypatch):
+        monkeypatch.setenv("ALLOWED_USERS", "abc,def")
+        monkeypatch.delenv("ALLOWED_CHATS", raising=False)
+        security.ALLOWED_USERS.clear()
+        security.ALLOWED_CHATS.clear()
+        load_authorization()
+        assert security.AUTH_CONFIGURED is True
+        assert security.ALLOWED_USERS == []

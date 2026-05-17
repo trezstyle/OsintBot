@@ -2,11 +2,14 @@
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from config import settings
 from security import SafeCommandError, run_command, validate_hostname
 
 log = logging.getLogger("cyber_volt")
+
+_executor = ThreadPoolExecutor(max_workers=2)
 
 def scan_network(target, all_ports=True):
     """Scan target with nmap. Target is validated before execution."""
@@ -21,7 +24,11 @@ def scan_network(target, all_ports=True):
     try:
         if not all_ports:
             COMMON = "22,80,443,21,25,53,110,143,993,995,8080,8443,3306,5432,6379,27017,3389,5900,9090,3000,5000,8000,9000"
-            out = run_command([nmap_path, "-T4", "--open", "-p", COMMON, safe_target], timeout=180)
+            future = _executor.submit(run_command, [nmap_path, "-T4", "--open", "-p", COMMON, safe_target], 180)
+            try:
+                out = future.result(timeout=180)
+            except TimeoutError:
+                return f"❌ Fast scan timed out after 180s"
             hosts = parse_nmap_hosts(out)
             summary = ""
             for line in out.split("\n"):
@@ -30,7 +37,11 @@ def scan_network(target, all_ports=True):
                     break
             return format_scan(safe_target, summary, hosts)
         # Full scan — all ports
-        out = run_command([nmap_path, "-Pn", "-T4", "--open", "-p-", safe_target], timeout=600)
+        future = _executor.submit(run_command, [nmap_path, "-Pn", "-T4", "--open", "-p-", safe_target], 600)
+        try:
+            out = future.result(timeout=600)
+        except TimeoutError:
+            return f"❌ Full scan timed out after 600s"
         hosts = parse_nmap_hosts(out)
         summary = ""
         for line in out.split("\n"):
