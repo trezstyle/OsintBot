@@ -7,6 +7,7 @@ def help_keyboard():
     kb.add(
         InlineKeyboardButton("🎯 IP Threat Hunt", callback_data="h_ip"),
         InlineKeyboardButton("🌐 Domain Recon", callback_data="h_domain"),
+        InlineKeyboardButton("🔑 Hash Check", callback_data="h_hash"),
     )
     # Network
     kb.add(
@@ -40,6 +41,7 @@ def help_keyboard():
     )
     kb.add(
         InlineKeyboardButton("🧬 MITRE ATT&CK", callback_data="h_mitre"),
+        InlineKeyboardButton("🧬 Attack Sim", callback_data="h_attack"),
     )
     kb.add(
         InlineKeyboardButton("📧 Email OSINT", callback_data="h_email"),
@@ -47,6 +49,7 @@ def help_keyboard():
     kb.add(
         InlineKeyboardButton("🔍 Tor Check", callback_data="h_tor"),
         InlineKeyboardButton("🌐 Proxy Check", callback_data="h_proxy"),
+        InlineKeyboardButton("🔗 URL Scan", callback_data="h_urlscan"),
     )
     kb.add(
         InlineKeyboardButton("📜 CT Logs", callback_data="h_ctlogs"),

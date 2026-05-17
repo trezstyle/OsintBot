@@ -60,6 +60,99 @@ def save_to_log(target, report):
         log.error(f"Failed to write threat intel log: {e}")
 
 
+def check_hash(hash_val: str) -> str:
+    hash_val = hash_val.strip().lower()
+    if not re.match(r'^[0-9a-f]{32}$', hash_val) and not re.match(r'^[0-9a-f]{40}$', hash_val) and not re.match(r'^[0-9a-f]{64}$', hash_val):
+        return "❌ Invalid hash format. Must be MD5 (32 hex), SHA1 (40 hex), or SHA256 (64 hex)."
+    key = settings.api.vt_api_key
+    if not key:
+        return "⚠ VT: No API key configured. Set VT_API_KEY in .env"
+    try:
+        r = requests.get(f"https://www.virustotal.com/api/v3/files/{hash_val}",
+                         headers={"x-apikey": key}, timeout=10)
+        if r.status_code == 200:
+            d = r.json()["data"]["attributes"]
+            stats = d.get("last_analysis_stats", {})
+            mal = stats.get("malicious", 0)
+            sus = stats.get("suspicious", 0)
+            harm = stats.get("harmless", 0)
+            file_name = d.get("meaningful_name", d.get("type_description", "N/A"))
+            file_type = d.get("type_description", "N/A")
+            size = d.get("size", "N/A")
+            first_sub = d.get("first_submission_date", None)
+            last_sub = d.get("last_submission_date", None)
+            if isinstance(size, int):
+                size = f"{size:,} bytes"
+            if first_sub:
+                first_sub = datetime.fromtimestamp(first_sub).strftime("%Y-%m-%d %H:%M:%S")
+            if last_sub:
+                last_sub = datetime.fromtimestamp(last_sub).strftime("%Y-%m-%d %H:%M:%S")
+            results = d.get("last_analysis_results", {})
+            detections = []
+            for engine, result in results.items():
+                if result.get("category") == "malicious":
+                    detections.append(engine)
+                    if len(detections) >= 5:
+                        break
+            emoji = "🔴" if mal > 0 else "🟢"
+            det_str = ", ".join(detections) if detections else "None"
+            return (f"{emoji} *VT Hash Check: `{hash_val}`*\n"
+                    f"File: `{file_name}`\n"
+                    f"Type: `{file_type}`\n"
+                    f"Size: `{size}`\n"
+                    f"Malicious: `{mal}` | Suspicious: `{sus}` | Harmless: `{harm}`\n"
+                    f"First seen: `{first_sub or 'N/A'}`\n"
+                    f"Last seen: `{last_sub or 'N/A'}`\n"
+                    f"Top engines: `{det_str}`")
+        elif r.status_code == 404:
+            return "🟢 Clean — no VT results"
+        return f"VT Hash: HTTP {r.status_code}"
+    except Exception as e:
+        return f"VT Hash check failed: {e}"
+
+
+def check_urlscan(url: str) -> str:
+    url = url.strip()
+    key = settings.api.vt_api_key
+    if not key:
+        return "⚠ VT: No API key configured"
+    try:
+        r = requests.post("https://www.virustotal.com/api/v3/urls",
+                          headers={"x-apikey": key},
+                          data={"url": url}, timeout=10)
+        if r.status_code != 200:
+            return f"VT URL submission failed: HTTP {r.status_code}"
+        analysis_id = r.json()["data"]["id"]
+        time.sleep(3)
+        r2 = requests.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}",
+                          headers={"x-apikey": key}, timeout=10)
+        if r2.status_code != 200:
+            return f"VT URL analysis failed: HTTP {r2.status_code}"
+        data = r2.json()["data"]["attributes"]
+        status = data.get("status", "")
+        if status in ("queued", "pending"):
+            return "⏳ Analysis in progress..."
+        stats = data.get("stats", {})
+        mal = stats.get("malicious", 0)
+        sus = stats.get("suspicious", 0)
+        harm = stats.get("harmless", 0)
+        results = data.get("results", {})
+        detections = []
+        for engine, result in results.items():
+            if result.get("category") == "malicious":
+                detections.append(engine)
+                if len(detections) >= 5:
+                    break
+        emoji = "🔴" if mal > 0 else "🟢"
+        det_str = ", ".join(detections) if detections else "None"
+        return (f"{emoji} *VT URL Scan*\n"
+                f"URL: `{url}`\n"
+                f"Malicious: `{mal}` | Suspicious: `{sus}` | Harmless: `{harm}`\n"
+                f"Detecting engines: `{det_str}`")
+    except Exception as e:
+        return f"VT URL scan failed: {e}"
+
+
 def get_vt_report(ip):
     key = settings.api.vt_api_key
     if not key: return "VT: No API key"
@@ -113,15 +206,43 @@ def get_geoip(ip):
         return "GeoIP: N/A"
 
 
+def _fmt_whois_date(val):
+    if not val:
+        return "N/A"
+    if isinstance(val, list):
+        val = val[0]
+    if isinstance(val, str):
+        return val
+    try:
+        return val.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(val)
+
+
+def _fmt_whois_list(val):
+    if not val:
+        return "N/A"
+    if isinstance(val, list):
+        return ", ".join(str(v) for v in val)
+    return str(val)
+
+
 def get_whois(domain):
     try:
         w = whois.whois(domain)
         return (f"🏢 *WHOIS for {domain}*\n"
-                f"Registrar: `{w.registrar}`\n"
-                f"Created: `{w.creation_date}`\n"
-                f"Organization: `{w.org}`")
-    except:
-        return "Whois: Failed"
+                f"📅 Registrar: `{w.registrar or 'N/A'}`\n"
+                f"📅 Created: `{_fmt_whois_date(w.creation_date)}`\n"
+                f"📅 Expires: `{_fmt_whois_date(w.expiration_date)}`\n"
+                f"📅 Updated: `{_fmt_whois_date(w.updated_date)}`\n"
+                f"🏢 Organization: `{w.org or 'N/A'}`\n"
+                f"👤 Registrant: `{w.name or 'N/A'}`\n"
+                f"📧 Email: `{_fmt_whois_list(w.emails)}`\n"
+                f"🌍 Country: `{w.country or 'N/A'}`\n"
+                f"📡 Name Servers: `{_fmt_whois_list(w.name_servers)}`\n"
+                f"🔖 Status: `{_fmt_whois_list(w.status)}`")
+    except Exception as e:
+        return f"Whois failed: {e}"
 
 
 def get_subdomains(domain):
@@ -274,6 +395,68 @@ def mitre_lookup(tid):
         return f"Technique `{tid}` not found."
     except Exception as e:
         return f"MITRE lookup failed: {e}"
+
+
+def attack_simulation(technique_id: str) -> str:
+    tid = technique_id.upper().strip()
+    if not tid.startswith("T"):
+        tid = "T" + tid
+    try:
+        data = _load_mitre()
+        technique = None
+        for obj in data.get("objects", []):
+            if obj.get("type") != "attack-pattern":
+                continue
+            refs = obj.get("external_references", [])
+            if any(tid == ref.get("external_id", "") for ref in refs):
+                technique = obj
+                break
+        if not technique:
+            return f"🔴 Technique `{tid}` not found in MITRE ATT&CK"
+        name = technique.get("name", "N/A")
+        desc = _strip_html(technique.get("description", "N/A"))[:500]
+        tactics = ", ".join(p.get("phase_name", "") for p in technique.get("kill_chain_phases", [])) or "N/A"
+        platforms = ", ".join(technique.get("x_mitre_platforms", [])) or "N/A"
+        permissions = ", ".join(technique.get("x_mitre_permissions_required", [])) or "N/A"
+        detection = _strip_html(technique.get("x_mitre_detection", ""))[:300] or "Not specified"
+        procedures = ""
+        examples = technique.get("x_mitre_examples", [])
+        if not examples:
+            for ref in technique.get("external_references", []):
+                if ref.get("source_name") in ("mitre-attack",) and ref.get("external_id") == tid:
+                    continue
+            data_sources = technique.get("x_mitre_data_sources", [])
+            if data_sources:
+                procedures = f"Data Sources: {', '.join(data_sources)}"
+        else:
+            ex = _strip_html(examples[0].get("description", ""))[:300] if isinstance(examples[0], dict) else str(examples[0])[:300]
+            if ex:
+                procedures = ex
+        mitigations = []
+        for obj in data.get("objects", []):
+            if obj.get("type") != "course-of-action":
+                continue
+            refs = obj.get("external_references", [])
+            if any(tid == ref.get("external_id", "") for ref in refs):
+                mitigations.append(obj)
+        mitigation_text = "Not specified"
+        if mitigations:
+            m_name = mitigations[0].get("name", "N/A")
+            m_desc = _strip_html(mitigations[0].get("description", ""))[:200] or "N/A"
+            mitigation_text = f"`{m_name}` — {m_desc}"
+        return (
+            f"🧬 *Attack Simulation: {tid}*\n\n"
+            f"📌 *Technique:* `{name}`\n"
+            f"🎯 *Tactic:* `{tactics}`\n"
+            f"💻 *Platforms:* `{platforms}`\n"
+            f"🔑 *Permissions:* `{permissions}`\n\n"
+            f"📝 *Description:*\n{desc}\n\n"
+            f"🔍 *Detection:*\n{detection}\n\n"
+            f"🛡 *Mitigation:*\n{mitigation_text}\n\n"
+            f"📋 *Procedure Example:*\n{procedures or 'No example available'}"
+        )
+    except Exception as e:
+        return f"Attack simulation failed: {e}"
 
 
 def check_ssl(domain: str) -> str:

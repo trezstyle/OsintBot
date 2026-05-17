@@ -11,7 +11,7 @@ from services.fim import fim_add, fim_check
 from services.reporting import generate_report
 from services.scanner import scan_network
 from services.system import analyze_logs, check_cve, format_bandwidth, format_compliance, format_firewall, format_status, format_top
-from services.threat_intel import check_blacklist, check_ctlogs, check_email, check_hibp, check_http_headers, check_phone, check_proxy, check_ssl, check_tor, get_whois, mitre_lookup, threat_hunt_domain, threat_hunt_ip
+from services.threat_intel import attack_simulation, check_blacklist, check_ctlogs, check_email, check_hash, check_hibp, check_http_headers, check_phone, check_proxy, check_ssl, check_tor, check_urlscan, get_whois, mitre_lookup, threat_hunt_domain, threat_hunt_ip
 from ui.keyboards import fim_keyboard, help_keyboard, logs_keyboard, menu_text, scan_keyboard, top_keyboard
 from watchers import suricata_alerts, suricata_lock, _set_alert_chat_id
 
@@ -79,6 +79,25 @@ _CMD_TABLE = {
         "prompt": "🕵️ *Enter a domain for WHOIS:*",
         "validate": "validate_domain",
         "success_msg": None,
+    },
+    "hash": {
+        "fn": check_hash,
+        "prompt": "🔑 *Enter hash (MD5/SHA1/SHA256):*",
+        "validate": None,
+        "validate_transform": lambda a: a.lower().strip(),
+        "success_msg": "🔑 *Checking hash `{arg}` on VirusTotal...*",
+    },
+    "urlscan": {
+        "fn": check_urlscan,
+        "prompt": "🔗 *Enter URL to scan:*\nExample: `https://example.com`",
+        "validate": None,
+        "success_msg": "🔗 *Scanning `{arg}` on VirusTotal...*",
+    },
+    "attack": {
+        "fn": attack_simulation,
+        "prompt": "🧬 *Enter MITRE technique ID:*\nExample: `T1059`",
+        "validate": None,
+        "success_msg": "🧬 *Simulating attack technique `{arg}`...*",
     },
 }
 
@@ -169,7 +188,7 @@ def cmd_start(m):
     bot.reply_to(m, f"{LOGO}\n🤖 *Cyber-Volt SOC Master v3.0*\n\nFull-featured SOC platform in Telegram.\n\nUse /start to open the menu.", parse_mode="Markdown", reply_markup=help_keyboard())
 
 
-@bot.message_handler(commands=["status", "top", "logs", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth", "email", "tor", "proxy", "ctlogs", "phone", "fw", "compliance"])
+@bot.message_handler(commands=["status", "top", "logs", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth", "email", "tor", "proxy", "ctlogs", "phone", "fw", "compliance", "hash", "urlscan", "attack"])
 @authorized_message
 def cmd_handler(m):
     _set_alert_chat_id(m.chat.id)
