@@ -459,6 +459,9 @@ def process_ssl(m):
     _set_alert_chat_id(m.chat.id)
     d = m.text.strip()
     if not d: bot.reply_to(m, "❌ No domain entered."); return
+    if not security.validate_domain(d):
+        bot.reply_to(m, f"❌ Invalid domain: `{d}`")
+        return
     bot.reply_to(m, f"🔒 *Checking SSL for `{d}`...*", parse_mode="Markdown")
     send_long_message(m.chat.id, check_ssl(d), parse_mode="Markdown")
 
@@ -468,6 +471,9 @@ def process_httpcheck(m):
     _set_alert_chat_id(m.chat.id)
     u = m.text.strip()
     if not u: bot.reply_to(m, "❌ No URL entered."); return
+    if not security.validate_domain(u.replace("https://", "").replace("http://", "").split("/")[0]):
+        bot.reply_to(m, f"❌ Invalid domain: `{u}`")
+        return
     bot.reply_to(m, f"🛡 *Checking HTTP headers for `{u}`...*", parse_mode="Markdown")
     send_long_message(m.chat.id, check_http_headers(u), parse_mode="Markdown")
 
@@ -522,6 +528,9 @@ def process_ctlogs(m):
     _set_alert_chat_id(m.chat.id)
     d = m.text.strip()
     if not d: bot.reply_to(m, "❌ No domain entered."); return
+    if not security.validate_domain(d):
+        bot.reply_to(m, f"❌ Invalid domain: `{d}`")
+        return
     bot.reply_to(m, f"📜 *Checking CT logs for `{d}`...*", parse_mode="Markdown")
     send_long_message(m.chat.id, check_ctlogs(d), parse_mode="Markdown")
 
@@ -544,6 +553,7 @@ def process_mitre(m):
 
 def process_whois(m):
     if not is_message_authorized(m): return
+    _set_alert_chat_id(m.chat.id)
     d = m.text.strip()
     if not d:
         bot.reply_to(m, "❌ No domain entered.")

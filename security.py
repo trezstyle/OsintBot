@@ -25,9 +25,15 @@ def load_authorization() -> None:
     chats = os.getenv("ALLOWED_CHATS", "")
     AUTH_CONFIGURED = bool(users.strip() or chats.strip())
     if users:
-        ALLOWED_USERS = [int(x.strip().strip('"').strip("'")) for x in users.split(",") if x.strip().strip('"').strip("'").lstrip("-").isdigit()]
+        try:
+            ALLOWED_USERS = [int(x.strip().strip('"').strip("'")) for x in users.split(",") if x.strip().strip('"').strip("'").lstrip("-").isdigit()]
+        except ValueError:
+            log.warning(f"Invalid ALLOWED_USERS value: {users}")
     if chats:
-        ALLOWED_CHATS = [int(x.strip().strip('"').strip("'")) for x in chats.split(",") if x.strip().strip('"').strip("'").lstrip("-").isdigit()]
+        try:
+            ALLOWED_CHATS = [int(x.strip().strip('"').strip("'")) for x in chats.split(",") if x.strip().strip('"').strip("'").lstrip("-").isdigit()]
+        except ValueError:
+            log.warning(f"Invalid ALLOWED_CHATS value: {chats}")
     if not ALLOWED_USERS and not ALLOWED_CHATS:
         if AUTH_CONFIGURED:
             log.warning("Authorization configured but no valid numeric IDs were found — bot will reject commands.")
@@ -85,7 +91,7 @@ def validate_package_name(text: str) -> Optional[str]:
     """Validate a Debian package name. Returns name or None."""
     text = text.strip().lower()
     # Debian package names: alphanumeric, +, -, .
-    pattern = r'^[a-z0-9][a-z0-9\+\.\-]+$'
+    pattern = r'^[a-z0-9][a-z0-9\+\\.\\-]*$'
     if re.match(pattern, text) and len(text) <= 128:
         return text
     return None
