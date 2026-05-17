@@ -99,3 +99,21 @@ def fim_keyboard():
     kb.add(InlineKeyboardButton("➕ Add File", callback_data="h_fim_add"), InlineKeyboardButton("🔍 Check All", callback_data="h_fim_check"))
     kb.add(InlineKeyboardButton("🔙 Menu", callback_data="h_menu"))
     return kb
+
+
+def top_keyboard(current_sort="cpu"):
+    kb = InlineKeyboardMarkup(row_width=4)
+    sorts = [
+        ("🔥 CPU", "h_top_cpu"),
+        ("💾 RAM", "h_top_ram"),
+        ("🆔 PID", "h_top_pid"),
+        ("🔤 Name", "h_top_name"),
+    ]
+    buttons = []
+    for label, data in sorts:
+        text = f"• {label} •" if data.endswith(current_sort) else label
+        buttons.append(InlineKeyboardButton(text, callback_data=data))
+    kb.add(*buttons)
+    kb.add(InlineKeyboardButton("🔄 Refresh", callback_data=f"h_top_{current_sort}"))
+    kb.add(InlineKeyboardButton("🔙 Menu", callback_data="h_menu"))
+    return kb

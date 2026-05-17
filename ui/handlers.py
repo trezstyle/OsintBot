@@ -14,7 +14,7 @@ from services.reporting import generate_report
 from services.scanner import scan_network
 from services.system import analyze_logs, check_cve, format_bandwidth, format_compliance, format_firewall, format_status, format_top
 from services.threat_intel import check_blacklist, check_ctlogs, check_email, check_hibp, check_http_headers, check_phone, check_proxy, check_ssl, check_tor, get_whois, mitre_lookup, threat_hunt_domain, threat_hunt_ip
-from ui.keyboards import fim_keyboard, help_keyboard, logs_keyboard, menu_text, scan_keyboard
+from ui.keyboards import fim_keyboard, help_keyboard, logs_keyboard, menu_text, scan_keyboard, top_keyboard
 from watchers import suricata_alerts, suricata_lock, _set_alert_chat_id
 
 log = logging.getLogger("cyber_volt")
@@ -119,7 +119,9 @@ def cmd_handler(m):
 
     try:
         if cmd == "status": send_long_message(m.chat.id, format_status(), parse_mode="Markdown")
-        elif cmd == "top": send_long_message(m.chat.id, format_top(), parse_mode="Markdown")
+        elif cmd == "top":
+            sort = args[0] if args and args[0] in ("cpu", "ram", "pid", "name") else "cpu"
+            send_long_message(m.chat.id, format_top(sort), parse_mode="Markdown", reply_markup=top_keyboard(sort))
         elif cmd == "bandwidth": send_long_message(m.chat.id, format_bandwidth(), parse_mode="Markdown")
         elif cmd == "logs":
             if args:
@@ -336,7 +338,14 @@ def handle_callback(call):
             msg = bot.send_message(cid, "📞 *Enter phone number:*\nExample: `+491234567`", parse_mode="Markdown")
             bot.register_next_step_handler(msg, process_phone)
         elif cmd == "status": send_long_message(cid, format_status(), parse_mode="Markdown")
-        elif cmd == "top": send_long_message(cid, format_top(), parse_mode="Markdown")
+        elif cmd in ("top", "top_cpu", "top_ram", "top_pid", "top_name"):
+            sort = cmd.split("_")[-1] if "_" in cmd else "cpu"
+            text = format_top(sort)
+            kb = top_keyboard(sort)
+            try:
+                bot.edit_message_text(text, cid, call.message.id, parse_mode="Markdown", reply_markup=kb)
+            except Exception:
+                send_long_message(cid, text, parse_mode="Markdown", reply_markup=kb)
         elif cmd == "bandwidth": send_long_message(cid, format_bandwidth(), parse_mode="Markdown")
         elif cmd == "fw": send_long_message(cid, format_firewall(), parse_mode="Markdown")
         elif cmd == "compliance": send_long_message(cid, format_compliance(), parse_mode="Markdown")

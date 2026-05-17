@@ -37,50 +37,98 @@ def failed_login_count():
 def recent_failed_logins(limit):
     return tail_auth_matches("Failed password", limit)
 
-def format_top():
+def _parse_processes(raw_lines, limit=12):
+    parsed = []
+    for line in raw_lines:
+        parts = line.split(maxsplit=4)
+        if len(parts) >= 5:
+            pid, cpu, mem_p, rss, cmd = parts
+            try:
+                parsed.append({
+                    "pid": int(pid),
+                    "cpu": float(cpu),
+                    "mem": float(mem_p),
+                    "rss": int(rss),
+                    "cmd": cmd.strip(),
+                })
+            except (ValueError, IndexError):
+                continue
+    return parsed[:limit]
+
+
+def _score_emoji(pct):
+    return "🔴" if pct >= 50 else "🟡" if pct >= 20 else "🟢"
+
+
+def _bar(value, width=10):
+    filled = int(value / 100 * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _fmt_rss(kb):
+    if kb >= 1048576:
+        return f"{kb / 1048576:.1f}G"
+    if kb >= 1024:
+        return f"{kb / 1024:.0f}M"
+    return f"{kb}K"
+
+
+SORT_FIELDS = {
+    "cpu": ("cpu", True),
+    "ram": ("mem", True),
+    "pid": ("pid", False),
+    "name": ("cmd", False),
+}
+
+
+def format_top(sort_by="cpu"):
+    """Format top processes with sort support and mobile-friendly layout.
+
+    Args:
+        sort_by: One of "cpu", "ram", "pid", "name"
+    """
     try:
         result = subprocess.run(
             ["ps", "-eo", "pid,pcpu,pmem,rss,args", "--sort=-pcpu", "--no-headers"],
             capture_output=True, text=True, timeout=5, check=False
         )
-        raw = result.stdout.strip().split("\n")[:8]
+        all_lines = result.stdout.strip().split("\n")
+        parsed = _parse_processes(all_lines)
 
         total_cpu = psutil.cpu_percent(interval=0.3)
         mem = psutil.virtual_memory()
         load = os.getloadavg()
+        total_procs = len(psutil.pids())
 
-        def bar(v, w=6):
-            filled = int(v / 100 * w)
-            return "█" * filled + "░" * (w - filled)
-
-        def fmt_rss(kb_str):
-            try:
-                kb = int(kb_str)
-                if kb >= 1048576: return f"{kb/1048576:.1f}G"
-                if kb >= 1024: return f"{kb/1024:.0f}M"
-                return f"{kb}K"
-            except:
-                return kb_str
+        key, reverse = SORT_FIELDS.get(sort_by, ("cpu", True))
+        parsed.sort(key=lambda p: p[key], reverse=reverse)
 
         header = (
             f"📊 *Top Processes*\n"
-            f"CPU: {total_cpu:.1f}% {bar(total_cpu)}  "
-            f"RAM: {mem.percent:.1f}% {bar(mem.percent)}  "
-            f"Load: {load[0]:.2f}\n\n"
+            f"┌{'─' * 36}┐\n"
+            f"│ CPU {_bar(total_cpu):<10} {total_cpu:>5.1f}% │\n"
+            f"│ RAM {_bar(mem.percent):<10} {mem.percent:>5.1f}% │\n"
+            f"│ Load `{load[0]:.2f}` · Procs `{total_procs}`{' ' * 14}│\n"
+            f"└{'─' * 36}┘\n"
         )
 
         rows = []
-        for i, line in enumerate(raw, 1):
-            parts = line.split(maxsplit=4)
-            if len(parts) >= 5:
-                pid, cpu, mem_p, rss, cmd = parts
-                rss_fmt = fmt_rss(rss)
-                cmd_short = cmd[:35] + "…" if len(cmd) > 35 else cmd
-                rows.append(
-                    f"{i:<2} {pid:<6} {cpu:>4}% {mem_p:>4}% {rss_fmt:>5}  {cmd_short}"
-                )
+        for i, p in enumerate(parsed, 1):
+            emoji = _score_emoji(p["cpu"])
+            rss_fmt = _fmt_rss(p["rss"])
+            cmd = p["cmd"][:40]
+            rows.append(
+                f"{emoji} `{p['pid']:>6}` {p['cpu']:>5.1f}% {p['mem']:>5.1f}% "
+                f"`{rss_fmt:>5}`  {cmd}"
+            )
 
-        return header + "```\n" + "\n".join(rows) + "\n```"
+        sort_labels = {"cpu": "CPU ⬇", "ram": "RAM", "pid": "PID", "name": "Name"}
+        sort_line = "Sort: " + " · ".join(
+            f"*{label}*" if k == sort_by else label
+            for k, label in sort_labels.items()
+        )
+
+        return header + "```\n" + "\n".join(rows) + "\n```\n" + sort_line
     except Exception as e:
         log.error(f"format_top error: {e}")
         return f"Top failed: {e}"
