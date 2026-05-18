@@ -32,6 +32,11 @@ class ApiSettings:
     vt_api_key: str = ""
     abuse_api_key: str = ""
     hibp_api_key: str = ""
+    sentry_dsn: str = ""
+    webhook_url: str = ""
+    webhook_port: int = 8443
+    metrics_port: int = 9099
+    locale: str = "en"
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,11 @@ def load_settings() -> Settings:
         vt_api_key=os.getenv("VT_API_KEY", ""),
         abuse_api_key=os.getenv("ABUSE_API_KEY", ""),
         hibp_api_key=os.getenv("HIBP_API_KEY", ""),
+        sentry_dsn=os.getenv("SENTRY_DSN", ""),
+        webhook_url=os.getenv("WEBHOOK_URL", ""),
+        webhook_port=int(os.getenv("WEBHOOK_PORT", "8443")),
+        metrics_port=int(os.getenv("METRICS_PORT", "9099")),
+        locale=os.getenv("LOCALE", "en"),
     )
     return Settings(paths=paths, api=api)
 

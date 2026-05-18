@@ -1,5 +1,6 @@
 """Telegram UI handlers for Cyber-Volt SOC Bot."""
 import logging
+import time
 from functools import wraps
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from config import settings
 from services.fim import fim_add, fim_check
 from services.notifier import init_bot
 from services.alert_store import get_alerts, get_history, record_command
+from services.i18n import t
+from services.metrics import alerts_total, callback_total, cmd_duration, commands_total, errors_total
 from services.rate_limit import _get_user_id, _heavy, _limiter_for, rate_limit
 from services.reporting import generate_report
 from services.scanner import scan_network
@@ -219,6 +222,10 @@ def cmd_handler(m):
     cmd = m.text.split()[0].replace("/", "")
     args = m.text.split()[1:]
 
+    # Prometheus metrics
+    commands_total.labels(command=cmd).inc()
+    _start_time = time.monotonic()
+
     # Record command history
     record_command(
         getattr(getattr(m, "from_user", None), "id", None),
@@ -231,7 +238,7 @@ def cmd_handler(m):
     uid = _get_user_id(m)
     if cmd in ("scan", "report", "fw", "compliance") and uid is not None:
         if not _heavy.is_allowed(uid):
-            bot.reply_to(m, "⚠️ *Rate limit reached.* This command can be used once every 5 minutes.", parse_mode="Markdown")
+            bot.reply_to(m, t("rate_limit"), parse_mode="Markdown")
             return
 
     try:
@@ -314,7 +321,7 @@ def cmd_handler(m):
             if sub == "alerts":
                 alerts = get_alerts(15)
                 if not alerts:
-                    bot.reply_to(m, "📋 *Alert History*\nNo alerts recorded yet.", parse_mode="Markdown")
+                    bot.reply_to(m, t("no_alerts"), parse_mode="Markdown")
                 else:
                     lines = ["📋 *Recent Alerts*", f"Total: {len(alerts)}\n"]
                     for a in alerts:
@@ -325,7 +332,7 @@ def cmd_handler(m):
             else:
                 entries = get_history(15)
                 if not entries:
-                    bot.reply_to(m, "📋 *Command History*\nNo commands recorded yet.", parse_mode="Markdown")
+                    bot.reply_to(m, t("no_history"), parse_mode="Markdown")
                 else:
                     lines = ["📋 *Recent Commands*", f"Total: {len(entries)}\n"]
                     for e in entries:
@@ -339,7 +346,7 @@ def cmd_handler(m):
             from services.job_queue import format_job_status
             job_id = args[0] if args else ""
             if not job_id:
-                bot.reply_to(m, "ℹ️ Usage: `/job <id>` — check the status of a running job.", parse_mode="Markdown")
+                bot.reply_to(m, t("job_usage"), parse_mode="Markdown")
             else:
                 send_long_message(m.chat.id, format_job_status(job_id), parse_mode="Markdown")
         elif cmd in _CMD_TABLE:
@@ -359,9 +366,12 @@ def cmd_handler(m):
                     bot.reply_to(m, config["prompt"], parse_mode="Markdown"),
                     lambda m, c=cmd: process_from_table(m, c)
                 )
+        cmd_duration.labels(command=cmd).observe(time.monotonic() - _t0)
     except Exception as e:
         log.error(f"cmd_handler({cmd}): {e}")
+        errors_total.labels(type=type(e).__name__).inc()
         bot.reply_to(m, f"❌ Error: {e}")
+        cmd_duration.labels(command=cmd).observe(time.monotonic() - _t0)
 
 
 @bot.message_handler(func=lambda m: True, content_types=["text"])
@@ -389,6 +399,7 @@ def auto_threat_hunt(m):
 def handle_callback(call):
     cmd = call.data[2:]
     cid = call.message.chat.id
+    callback_total.labels(action=cmd).inc()
     log.info(f"Callback: data={call.data!r}, cmd={cmd!r}")
     try:
         bot.answer_callback_query(call.id)

@@ -9,6 +9,7 @@ import time
 
 from config import settings
 from services.alert_store import push_alert
+from services.metrics import alerts_total
 from services.notifier import send_message
 from services.system import recent_failed_logins
 from services.threat_intel import get_abuseipdb_report, get_geoip, get_vt_report
@@ -170,6 +171,7 @@ def suricata_watcher() -> None:
                 if len(suricata_alerts) > 50:
                     suricata_alerts.pop(0)
             push_alert({"time": now.isoformat(), "line": sig, "type": "suricata"})
+            alerts_total.labels(severity="suricata").inc()
 
             ips = re.findall(r"\d+\.\d+\.\d+\.\d+", sig)
 

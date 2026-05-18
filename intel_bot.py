@@ -11,19 +11,48 @@ from telebot.types import BotCommand
 
 from config import settings
 from logging_config import configure_logging
-from runtime import polling_loop
 
 log = configure_logging(log_file=settings.paths.bot_log_file)
 
-from services.fim import fim_check
-from services.notifier import send_message
-from services.system import format_status
+# ── Sentry ──
+if settings.api.sentry_dsn:
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=settings.api.sentry_dsn,
+            traces_sample_rate=0.1,
+            environment=os.getenv("ENVIRONMENT", "production"),
+        )
+        log.info("Sentry SDK initialized")
+    except Exception as e:
+        log.warning("Sentry init failed: %s", e)
+
+# ── i18n ──
+from services.i18n import set_locale  # noqa: E402
+
+set_locale(settings.api.locale)
+
+# ── Metrics ──
+from services.metrics import (  # noqa: E402
+    alerts_total,
+    callback_total,
+    cmd_duration,
+    commands_total,
+    errors_total,
+    start_metrics_server,
+    uptime_gauge,
+)
+
+# ── Core imports ──
+from runtime import polling_loop  # noqa: E402
+
+from services.fim import fim_check  # noqa: E402
 from ui.handlers import bot  # noqa: E402
 from watchers import alert_watcher, suricata_watcher  # noqa: E402
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    """Write content atomically using a temporary file."""
     tmp = path.with_suffix(".pid.tmp")
     try:
         tmp.write_text(content, encoding="utf-8")
@@ -95,8 +124,7 @@ def set_commands():
 
 
 def _scheduler():
-    """Run periodic tasks every 24 hours."""
-    INTERVAL = 86400  # 24h
+    INTERVAL = 86400
     while True:
         time.sleep(INTERVAL)
         try:
@@ -106,17 +134,72 @@ def _scheduler():
             log.error("Scheduler FIM failed: %s", e)
 
 
+def _start_webhook():
+    """Start Flask webhook server in background thread."""
+    import flask
+    from telebot.types import Update
+
+    app = flask.Flask(__name__)
+    secret = os.getenv("WEBHOOK_SECRET", "")
+
+    @app.route(f"/webhook/{settings.api.telegram_token}", methods=["POST"])
+    def webhook():
+        if flask.request.headers.get("X-Telegram-Bot-Api-Secret-Token", "") != secret:
+            return "Unauthorized", 403
+        update = Update.de_json(flask.request.get_json(force=True))
+        if update.message:
+            from runtime import dispatch_message
+
+            dispatch_message(bot, update.message)
+        elif update.callback_query:
+            from runtime import dispatch_callback
+
+            dispatch_callback(bot, update.callback_query)
+        return "OK", 200
+
+    app.run(host="0.0.0.0", port=settings.api.webhook_port, debug=False)
+
+
+def _uptime_tracker():
+    while True:
+        uptime_gauge.set(time.monotonic())
+        time.sleep(15)
+
+
 if __name__ == "__main__":
     threading.Thread(target=alert_watcher, daemon=True).start()
     threading.Thread(target=suricata_watcher, daemon=True).start()
     threading.Thread(target=_scheduler, daemon=True).start()
+    threading.Thread(target=_uptime_tracker, daemon=True).start()
+
+    try:
+        start_metrics_server(settings.api.metrics_port)
+        log.info("Metrics server on port %d", settings.api.metrics_port)
+    except Exception as e:
+        log.warning("Metrics server failed: %s", e)
+
     acquire_pid_guard()
     atexit.register(cleanup_pid)
-    cleanup_webhook()
-    try:
-        set_commands()
-    except Exception as e:
-        log.warning(f"Failed to set BotFather commands: {e}")
-    time.sleep(5)
-    log.info("Starting custom polling loop")
-    polling_loop(bot)
+
+    # Webhook or polling mode
+    if settings.api.webhook_url:
+        cleanup_webhook()
+        bot.set_webhook(
+            url=f"{settings.api.webhook_url}/webhook/{settings.api.telegram_token}",
+            secret_token=os.getenv("WEBHOOK_SECRET", ""),
+        )
+        log.info("Webhook set to %s", settings.api.webhook_url)
+        try:
+            set_commands()
+        except Exception as e:
+            log.warning("Failed to set BotFather commands: %s", e)
+        _start_webhook()
+    else:
+        cleanup_webhook()
+        try:
+            set_commands()
+        except Exception as e:
+            log.warning("Failed to set BotFather commands: %s", e)
+        time.sleep(5)
+        log.info("Starting custom polling loop")
+        polling_loop(bot)
