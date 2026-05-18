@@ -57,6 +57,26 @@ def is_authorized(user_id: int, chat_id: int) -> bool:
     return False
 
 
+def is_admin(user_id: int) -> bool:
+    """Check if user has admin role in the database."""
+    try:
+        from services.database import get_user
+        user = get_user(user_id)
+        return user is not None and user.get("role") == "admin"
+    except Exception:
+        return user_id in ALLOWED_USERS
+
+
+def is_readonly(user_id: int) -> bool:
+    """Check if user has readonly role."""
+    try:
+        from services.database import get_user
+        user = get_user(user_id)
+        return user is not None and user.get("role") == "readonly"
+    except Exception:
+        return False
+
+
 # ── Input Validators ──
 
 def validate_ip(text: str) -> Optional[str]:

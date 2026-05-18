@@ -29,6 +29,11 @@ mitre_cache.json
 api_cache.sqlite
 alert_history.json
 
+# Database
+bot.db
+bot.db-wal
+bot.db-shm
+
 # Runtime logs
 threat_intel_log.md
 

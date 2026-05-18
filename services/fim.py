@@ -1,14 +1,13 @@
-"""File Integrity Monitoring service."""
+"""File Integrity Monitoring service (SQLite-backed)."""
 import hashlib
-import json
 import logging
 import os
 import stat
-import tempfile
 from datetime import datetime
 
 from config import settings
 from security import validate_fim_path
+from services.database import fim_upsert, fim_load
 
 log = logging.getLogger("cyber_volt")
 
@@ -45,65 +44,39 @@ def _hash_directory(path: str) -> str:
     return hashlib.sha256("\n".join(entries).encode()).hexdigest()
 
 
-def load_fim():
-    if os.path.exists(settings.paths.fim_file):
-        try:
-            with open(settings.paths.fim_file) as f:
-                return json.load(f)
-        except json.JSONDecodeError as e:
-            log.error(f"Corrupt FIM database: {e}")
-            return {}
-    return {}
-
-
-def save_fim(db):
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", dir=os.path.dirname(settings.paths.fim_file),
-        delete=False, suffix=".tmp"
-    )
-    try:
-        json.dump(db, tmp, indent=2)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp.close()
-        os.replace(tmp.name, settings.paths.fim_file)
-    except Exception:
-        os.unlink(tmp.name)
-        raise
-
-
 def fim_add(path):
     path = validate_fim_path(path)
     if not path:
         allowed = ", ".join(fim_allowed_prefixes())
         return f"❌ Invalid or unauthorized path. Allowed prefixes: `{allowed}`"
-    if not os.path.exists(path): return f"❌ File not found: {path}"
+    if not os.path.exists(path):
+        return f"❌ File not found: {path}"
     try:
         if os.path.isfile(path) and not stat.S_ISREG(os.stat(path).st_mode):
             return f"❌ Not a regular file (device/special): `{path}`"
     except OSError as e:
         return f"❌ Cannot stat: {e}"
-    db = load_fim()
+
     if os.path.isdir(path):
         try:
             h = _hash_directory(path)
         except Exception as e:
             return f"❌ Error reading directory: {e}"
-        db[path] = {"hash": h, "added": str(datetime.now()), "type": "directory"}
-        save_fim(db)
+        fim_upsert(path, h, str(datetime.now()), "directory")
         return f"✅ *FIM Added (dir)*\n`{path}`\nSHA256: `{h[:16]}...`"
+
     try:
         h = _hash_file_stream(path)
     except Exception as e:
         return f"❌ Error reading file: {e}"
-    db[path] = {"hash": h, "added": str(datetime.now()), "type": "file"}
-    save_fim(db)
+    fim_upsert(path, h, str(datetime.now()), "file")
     return f"✅ *FIM Added*\n`{path}`\nSHA256: `{h[:16]}...`"
 
 
 def fim_check():
-    db = load_fim()
-    if not db: return "📋 *FIM Database*\nNo files monitored.\nUse `/fim add <path>`"
+    db = fim_load()
+    if not db:
+        return "📋 *FIM Database*\nNo files monitored.\nUse `/fim add <path>`"
     out = []
     for path, data in db.items():
         if not os.path.exists(path):

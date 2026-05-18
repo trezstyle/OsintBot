@@ -197,6 +197,20 @@ def authorized_callback(func):
     return wrapper
 
 
+def admin_required(func):
+    """Decorator: authorized + must be admin for dangerous commands."""
+    @wraps(func)
+    async def wrapper(message: Message, **kwargs):
+        if not await is_message_authorized(message):
+            return
+        uid = getattr(getattr(message, "from_user", None), "id", None)
+        if uid and not security.is_admin(uid):
+            await message.answer("❌ This command requires admin privileges.")
+            return
+        return await func(message, **kwargs)
+    return wrapper
+
+
 # ── Handlers ──
 
 LOGO = """```
@@ -207,6 +221,51 @@ LOGO = """```
 ╚██████╗ ╚████╔╝ ██████╔╝███████╗██║  ██║
  ╚═════╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝
 ```"""
+
+
+@router.message(Command("users"))
+@authorized_message
+async def cmd_users(message: Message):
+    """Manage authorized users: /users, /users add <id> <role>, /users del <id>"""
+    from services.database import delete_user, list_users, set_user
+    uid = getattr(getattr(message, "from_user", None), "id", None)
+    if uid and not security.is_admin(uid):
+        await message.answer("❌ Admin privileges required.")
+        return
+    args = message.text.split()[1:]
+    if not args:
+        users = list_users()
+        if not users:
+            await message.answer("📋 *Users*\nNo users in database. Auth via ALLOWED_USERS in .env", parse_mode="Markdown")
+        else:
+            lines = [f"📋 *Users ({len(users)})*"]
+            for u in users:
+                lines.append(f"`{u['user_id']}` — *{u['role']}* — @{u['username'] or '?'} — _{u['added'][:10]}_")
+            await send_long_message(message.chat.id, "\n".join(lines), parse_mode="Markdown")
+        return
+
+    action = args[0]
+    if action == "add" and len(args) >= 3:
+        try:
+            target_id = int(args[1])
+            role = args[2].lower()
+            if role not in ("admin", "readonly", "observer"):
+                await message.answer("❌ Role must be: `admin`, `readonly`, or `observer`")
+                return
+            username = args[3] if len(args) > 3 else "cli"
+            set_user(target_id, username, role)
+            await message.answer(f"✅ User `{target_id}` added as *{role}*", parse_mode="Markdown")
+        except ValueError:
+            await message.answer("❌ Invalid user ID. Usage: `/users add <id> <role> [username]`")
+    elif action == "del" and len(args) >= 2:
+        try:
+            target_id = int(args[1])
+            delete_user(target_id)
+            await message.answer(f"✅ User `{target_id}` removed", parse_mode="Markdown")
+        except ValueError:
+            await message.answer("❌ Invalid user ID. Usage: `/users del <id>`")
+    else:
+        await message.answer("Usage:\n`/users` — list\n`/users add <id> <role>` — add user\n`/users del <id>` — remove", parse_mode="Markdown")
 
 
 @router.message(Command("start"))
@@ -224,7 +283,7 @@ COMMAND_LIST = [
     "status", "top", "logs", "whois", "recon", "scan", "fim", "cve", "hibp",
     "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth",
     "email", "tor", "proxy", "ctlogs", "phone", "fw", "compliance",
-    "hash", "urlscan", "attack", "job", "history",
+    "hash", "urlscan", "attack", "job", "history", "users",
 ]
 
 
@@ -249,6 +308,13 @@ async def cmd_handler(message: Message, command: CommandObject, state: FSMContex
     if cmd in ("scan", "report", "fw", "compliance") and uid is not None:
         if not _heavy.is_allowed(uid):
             await message.answer(t("rate_limit"), parse_mode="Markdown")
+            return
+
+    # Admin-only commands
+    if cmd in ("fw", "scan", "report", "users"):
+        uid = getattr(getattr(message, "from_user", None), "id", None)
+        if uid and not security.is_admin(uid):
+            await message.answer("❌ This command requires admin privileges.")
             return
 
     try:
@@ -304,7 +370,20 @@ async def cmd_handler(message: Message, command: CommandObject, state: FSMContex
         elif cmd == "fw":
             action = args[0] if args else "status"
             fw_args = " ".join(args[1:]) if len(args) > 1 else ""
-            await send_long_message(message.chat.id, format_firewall(action, fw_args), parse_mode="Markdown")
+            if action in ("allow", "deny", "delete") and fw_args:
+                from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+                confirm_data = f"fw_confirm_{action}_{fw_args}"
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ Confirm", callback_data=confirm_data),
+                     InlineKeyboardButton(text="❌ Cancel", callback_data="h_menu")],
+                ])
+                await message.answer(
+                    f"⚠️ *Confirm firewall change:*\n`ufw {action} {fw_args}`",
+                    parse_mode="Markdown",
+                    reply_markup=kb,
+                )
+            else:
+                await send_long_message(message.chat.id, format_firewall(action, fw_args), parse_mode="Markdown")
         elif cmd == "compliance":
             await send_long_message(message.chat.id, format_compliance(), parse_mode="Markdown")
         elif cmd == "mitre":
@@ -416,6 +495,24 @@ async def auto_threat_hunt(message: Message):
 
 
 # ── Callbacks ──
+
+@router.callback_query(lambda c: c.data and c.data.startswith("fw_confirm_"))
+@authorized_callback
+async def handle_fw_confirm(call: CallbackQuery):
+    """Execute firewall confirmation inline."""
+    payload = call.data[len("fw_confirm_"):]
+    parts = payload.split("_", 1)
+    if len(parts) != 2:
+        await call.answer("❌ Invalid confirmation data", show_alert=True)
+        return
+    action, arg = parts[0], parts[1]
+    result = format_firewall("confirm", f"{action} {arg}")
+    try:
+        await call.message.edit_text(result, parse_mode="Markdown")
+    except Exception:
+        await bot.send_message(call.message.chat.id, result, parse_mode="Markdown")
+    await call.answer("✅ Done")
+
 
 @router.callback_query(lambda c: c.data and c.data.startswith("h_"))
 @authorized_callback

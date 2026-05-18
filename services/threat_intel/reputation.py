@@ -18,11 +18,6 @@ try:
 except ImportError:
     dns = None
 
-try:
-    import dns.resolver
-except ImportError:
-    dns = None
-
 log = logging.getLogger("cyber_volt")
 
 

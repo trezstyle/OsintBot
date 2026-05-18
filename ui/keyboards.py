@@ -28,8 +28,7 @@ def help_keyboard():
          InlineKeyboardButton(text="🔗 URL Scan", callback_data="h_urlscan")],
         [InlineKeyboardButton(text="📜 CT Logs", callback_data="h_ctlogs"),
          InlineKeyboardButton(text="📞 Phone OSINT", callback_data="h_phone")],
-        [InlineKeyboardButton(text="🛡 Firewall", callback_data="h_fw"),
-         InlineKeyboardButton(text="✅ Compliance", callback_data="h_compliance")],
+        [InlineKeyboardButton(text="🛡 Firewall", callback_data="h_fw")],
         [InlineKeyboardButton(text="📄 PDF Report", callback_data="h_report")],
         [InlineKeyboardButton(text="🚨 Suricata Alerts", callback_data="h_alerts")],
     ]

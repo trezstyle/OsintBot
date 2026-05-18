@@ -50,6 +50,7 @@ from services.metrics import (
 )
 
 # ── Core imports ──
+from services.database import init_db
 from services.fim import fim_check
 from services.notifier import init_bot
 from watchers import alert_watcher, suricata_watcher
@@ -121,6 +122,7 @@ async def set_commands(bot: Bot):
         BotCommand(command="alerts", description="🚨 View Suricata IDS alerts"),
         BotCommand(command="job", description="🔍 Check status of a running job"),
         BotCommand(command="history", description="📋 Show command history or /history alerts"),
+        BotCommand(command="users", description="👥 Manage users (admin only)"),
     ]
     await bot.set_my_commands(data)
     log.info(f"Set {len(data)} BotFather commands")
@@ -187,6 +189,8 @@ async def main():
 
     acquire_pid_guard()
     atexit.register(cleanup_pid)
+
+    init_db()
 
     from runtime import create_dispatcher
     dp = create_dispatcher(bot)

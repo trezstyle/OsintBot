@@ -1,74 +1,33 @@
-"""Persistent alert storage — stores Suricata alerts and command history in JSON."""
-import json
-import logging
-import os
+"""Persistent alert storage — backed by SQLite."""
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
-from config import settings
-
-log = logging.getLogger("cyber_volt.alert_store")
-
-ALERT_DB = settings.paths.base_dir / "alert_history.json"
-MAX_ALERTS = 200
-MAX_HISTORY = 100
-
-
-def _load() -> dict[str, Any]:
-    try:
-        if ALERT_DB.exists():
-            data = json.loads(ALERT_DB.read_text())
-            if isinstance(data.get("alerts"), list) and isinstance(data.get("history"), list):
-                return data
-    except (json.JSONDecodeError, OSError) as e:
-        log.warning("Corrupt alert DB, resetting: %s", e)
-    return {"alerts": [], "history": []}
-
-
-def _save(data: dict[str, Any]) -> None:
-    tmp = ALERT_DB.with_suffix(".tmp")
-    try:
-        tmp.write_text(json.dumps(data, default=str, ensure_ascii=False))
-        tmp.replace(ALERT_DB)
-    except OSError as e:
-        log.error("Failed to write alert DB: %s", e)
-    finally:
-        if tmp.exists():
-            tmp.unlink(missing_ok=True)
+from services.database import get_alerts as _db_get_alerts
+from services.database import get_history as _db_get_history
+from services.database import push_alert as _db_push_alert
+from services.database import record_command as _db_record_command
 
 
 def push_alert(alert: dict[str, Any]) -> None:
-    data = _load()
-    data["alerts"].append(alert)
-    if len(data["alerts"]) > MAX_ALERTS:
-        data["alerts"] = data["alerts"][-MAX_ALERTS:]
-    _save(data)
+    _db_push_alert(alert.get("time", datetime.now().isoformat()), alert.get("line", ""), alert.get("type", "suricata"))
 
 
 def push_history(entry: dict[str, Any]) -> None:
-    data = _load()
-    data["history"].append(entry)
-    if len(data["history"]) > MAX_HISTORY:
-        data["history"] = data["history"][-MAX_HISTORY:]
-    _save(data)
+    _db_record_command(
+        entry.get("user_id"),
+        entry.get("username", "unknown"),
+        entry.get("cmd", ""),
+        entry.get("args", ""),
+    )
 
 
 def get_alerts(limit: int = 20) -> list[dict[str, Any]]:
-    data = _load()
-    return list(reversed(data["alerts"][-limit:]))
+    return _db_get_alerts(limit)
 
 
 def get_history(limit: int = 20) -> list[dict[str, Any]]:
-    data = _load()
-    return list(reversed(data["history"][-limit:]))
+    return _db_get_history(limit)
 
 
-def record_command(user_id: int, username: str, cmd: str, args: str) -> None:
-    push_history({
-        "time": datetime.now().isoformat(),
-        "user_id": user_id,
-        "username": username or "unknown",
-        "cmd": cmd,
-        "args": args,
-    })
+def record_command(user_id: int | None, username: str | None, cmd: str, args: str) -> None:
+    _db_record_command(user_id, username, cmd, args)
