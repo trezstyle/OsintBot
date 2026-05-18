@@ -103,23 +103,27 @@ def format_top(sort_by="cpu"):
         key, reverse = SORT_FIELDS.get(sort_by, ("cpu", True))
         parsed.sort(key=lambda p: p[key], reverse=reverse)
 
+        W = 36
+        cpu_inner = f" CPU {_bar(total_cpu)}  {total_cpu:>5.1f}% "
+        ram_inner = f" RAM {_bar(mem.percent)}  {mem.percent:>5.1f}% "
+        load_inner = f" Load {load[0]:.2f} · Procs {total_procs} "
         header = (
             f"📊 *Top Processes*\n"
-            f"┌{'─' * 36}┐\n"
-            f"│ CPU {_bar(total_cpu):<10} {total_cpu:>5.1f}% │\n"
-            f"│ RAM {_bar(mem.percent):<10} {mem.percent:>5.1f}% │\n"
-            f"│ Load {load[0]:.2f} · Procs {total_procs}{' ' * 18}│\n"
-            f"└{'─' * 36}┘\n"
+            f"┌{'─' * W}┐\n"
+            f"│{cpu_inner:<{W}}│\n"
+            f"│{ram_inner:<{W}}│\n"
+            f"│{load_inner:<{W}}│\n"
+            f"└{'─' * W}┘\n"
         )
 
         rows = []
-        for i, p in enumerate(parsed, 1):
+        for p in parsed:
             emoji = _score_emoji(p["cpu"])
             rss_fmt = _fmt_rss(p["rss"])
             cmd = p["cmd"][:40]
             rows.append(
-                f"{emoji} `{p['pid']:>6}` {p['cpu']:>5.1f}% {p['mem']:>5.1f}% "
-                f"`{rss_fmt:>5}`  `{cmd}`"
+                f"{emoji} `{p['pid']:>6}`   {p['cpu']:>5.1f}%   {p['mem']:>5.1f}% "
+                f"`{rss_fmt:>5}`  {cmd}"
             )
 
         sort_labels = {"cpu": "CPU ⬇", "ram": "RAM", "pid": "PID", "name": "Name"}
