@@ -9,12 +9,27 @@ import logging
 from collections import defaultdict
 from datetime import timedelta
 
+from services.rate_limit import RateLimiter
+
 import psutil
 import requests
 
 from config import settings
 
 log = logging.getLogger("cyber_volt")
+
+# ── TTL cache ──
+
+_TTL_CACHE: dict[str, tuple[float, object]] = {}
+
+def _cached(key: str, ttl: float, fn):
+    now = time.monotonic()
+    entry = _TTL_CACHE.get(key)
+    if entry and now - entry[0] < ttl:
+        return entry[1]
+    val = fn()
+    _TTL_CACHE[key] = (now, val)
+    return val
 
 
 def auth_log_lines():
@@ -137,6 +152,9 @@ def format_top(sort_by="cpu"):
         log.error(f"format_top error: {e}")
         return f"Top failed: {e}"
 def format_status():
+    return _cached("format_status", 2.0, _format_status_impl)
+
+def _format_status_impl():
     try:
         cpu = psutil.cpu_percent(interval=0.5)
         mem = psutil.virtual_memory()
@@ -212,6 +230,9 @@ def analyze_logs(filter_type):
         return f"{header}\n```\n{out.strip()}\n```"
     except Exception as e:
         return f"Log analysis failed: {e}"
+_nvd_limiter = RateLimiter(max_calls=5, window_seconds=60)
+
+
 def check_cve(pkg):
     """Check CVEs for a package. Package name is validated before shell access."""
     from security import validate_package_name
@@ -232,8 +253,10 @@ def check_cve(pkg):
         except Exception:
             pass
 
-        # NVD API call - safe, URL params are validated package name
+        # NVD API call with rate limiting (free tier: ~5 req/min)
         import urllib.parse
+        if not _nvd_limiter.is_allowed(0):
+            return f"⚠ Rate limited: NVD API allows ~5 requests/min. Wait and retry."
         safe_query = urllib.parse.quote(safe_pkg)
         r = requests.get(
             f"https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch={safe_query}&resultsPerPage=5",
@@ -267,6 +290,9 @@ def format_speed(bytes_per_sec):
 
 
 def format_bandwidth():
+    return _cached("format_bandwidth", 5.0, _format_bandwidth_impl)
+
+def _format_bandwidth_impl():
     try:
         counters = psutil.net_io_counters(pernic=True)
         time.sleep(1)
@@ -305,9 +331,15 @@ def _run_cmd(args, timeout=5):
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
 
 
+def _ufw_installed() -> bool:
+    return bool(shutil.which("ufw")) or any(Path(p).exists() for p in ("/usr/sbin/ufw", "/sbin/ufw"))
+
+
 def format_firewall(action: str = None, args: str = None) -> str:
     action = (action or "status").strip().lower()
     args = (args or "").strip()
+    if not _ufw_installed():
+        return "❌ UFW not found. Install with: `apt install ufw`"
     try:
         if action in ("", "status"):
             result = _run_cmd(["ufw", "status", "numbered"], timeout=5)
@@ -445,10 +477,9 @@ def format_compliance() -> str:
             checks.append(_compliance_status(False, "Open ports", str(e), warn=True))
 
         try:
-            result = _run_cmd(["journalctl", "--since", "24 hours ago", "--no-pager"], timeout=8)
-            auth_text = result.stdout if result.returncode == 0 else "\n".join(auth_log_lines()[-500:])
+            auth_text = "\n".join(auth_log_lines()[-500:])
             failed = len([line for line in auth_text.splitlines() if "Failed password" in line])
-            checks.append(_compliance_status(failed == 0, "Failed logins", f"{failed} in last 24h" if result.returncode == 0 else f"{failed} recent auth lines", warn=failed > 0))
+            checks.append(_compliance_status(failed == 0, "Failed logins", f"{failed} in last 24h", warn=failed > 0))
         except Exception as e:
             checks.append(_compliance_status(False, "Failed logins", str(e), warn=True))
 

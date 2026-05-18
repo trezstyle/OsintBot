@@ -4,9 +4,8 @@ import logging
 import re
 import time
 
-import requests
-
 from config import settings
+from services.threat_intel import get_http
 
 log = logging.getLogger("cyber_volt")
 
@@ -16,7 +15,7 @@ def get_vt_report(ip):
     if not key:
         return "VT: No API key"
     try:
-        r = requests.get(
+        r = get_http().get(
             f"https://www.virustotal.com/api/v3/ip_addresses/{ip}",
             headers={"x-apikey": key},
             timeout=10,
@@ -47,7 +46,7 @@ def check_hash(hash_val: str) -> str:
     if not key:
         return "⚠ VT: No API key configured. Set VT_API_KEY in .env"
     try:
-        r = requests.get(
+        r = get_http().get(
             f"https://www.virustotal.com/api/v3/files/{hash_val}",
             headers={"x-apikey": key},
             timeout=10,
@@ -101,7 +100,7 @@ def check_urlscan(url: str) -> str:
     if not key:
         return "⚠ VT: No API key configured"
     try:
-        r = requests.post(
+        r = get_http().post(
             "https://www.virustotal.com/api/v3/urls",
             headers={"x-apikey": key},
             data={"url": url},
@@ -111,7 +110,7 @@ def check_urlscan(url: str) -> str:
             return f"VT URL submission failed: HTTP {r.status_code}"
         analysis_id = r.json()["data"]["id"]
         time.sleep(3)
-        r2 = requests.get(
+        r2 = get_http().get(
             f"https://www.virustotal.com/api/v3/analyses/{analysis_id}",
             headers={"x-apikey": key},
             timeout=10,

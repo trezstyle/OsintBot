@@ -8,6 +8,7 @@ import threading
 import time
 
 from config import settings
+from services.alert_store import push_alert
 from services.notifier import send_message
 from services.system import recent_failed_logins
 from services.threat_intel import get_abuseipdb_report, get_geoip, get_vt_report
@@ -122,22 +123,37 @@ suricata_lock = threading.Lock()
 
 
 def suricata_watcher() -> None:
-    """Monitor Suricata fast.log for IDS alerts."""
+    """Monitor Suricata fast.log for IDS alerts using tail (seek) approach."""
     path = str(settings.paths.suricata_fast_log_file)
     seen: set[str] = set()
+    pos = 0
+    last_inode = None
     while True:
         time.sleep(15)
         if not os.path.exists(path):
             continue
         try:
+            st = os.stat(path)
+            current_inode = st.st_ino
+            # Detect logrotate: new inode or file shrunk
+            if last_inode is not None and (current_inode != last_inode or st.st_size < pos):
+                pos = 0
+                seen.clear()
+            last_inode = current_inode
+
+            if st.st_size <= pos:
+                continue
+
             with open(path, "r", errors="ignore") as f:
+                f.seek(pos)
                 content = f.read()
+                pos = f.tell()
         except OSError as exc:
             log.debug("suricata_watcher: cannot read %s: %s", path, exc)
             continue
 
         now = datetime.now()
-        lines = content.strip().splitlines()[-20:] if content.strip() else []
+        lines = [l for l in content.strip().splitlines() if l.strip()] if content.strip() else []
 
         for line in lines:
             if not line:
@@ -153,6 +169,7 @@ def suricata_watcher() -> None:
                 suricata_alerts.append({"time": now, "line": sig})
                 if len(suricata_alerts) > 50:
                     suricata_alerts.pop(0)
+            push_alert({"time": now.isoformat(), "line": sig, "type": "suricata"})
 
             ips = re.findall(r"\d+\.\d+\.\d+\.\d+", sig)
 

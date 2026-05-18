@@ -6,11 +6,11 @@ import socket
 import subprocess
 from urllib.parse import quote_plus
 
-import requests
 import phonenumbers
 from phonenumbers import carrier, geocoder, timezone
 
 from config import settings
+from services.threat_intel import get_http
 from services.threat_intel.reputation import _strip_html
 
 try:
@@ -86,7 +86,7 @@ def check_hibp(query):
 
         if query.lower().startswith("name:"):
             name = query.split(":", 1)[1].strip()
-            r = requests.get(
+            r = get_http().get(
                 f"https://haveibeenpwned.com/api/v3/breach/{name}",
                 headers={"hibp-api-key": hibp_key},
                 timeout=10,
@@ -109,7 +109,7 @@ def check_hibp(query):
             return f"⚠ HIBP: HTTP {r.status_code}"
 
         domain = query.split("@")[-1] if "@" in query else query
-        r = requests.get(
+        r = get_http().get(
             f"https://haveibeenpwned.com/api/v3/breaches?domain={domain}",
             headers={"hibp-api-key": hibp_key},
             timeout=10,
@@ -156,7 +156,7 @@ def check_email(email: str) -> str:
         mx_ok, mx_info = _has_mx(domain)
         gravatar_hash = hashlib.md5(email.lower().encode()).hexdigest()
         gravatar_url = f"https://www.gravatar.com/{gravatar_hash}.json?d=404"
-        gravatar = requests.get(gravatar_url, timeout=10)
+        gravatar = get_http().get(gravatar_url, timeout=10)
         gravatar_ok = gravatar.status_code == 200
 
         spf_txt = _dig_txt(domain)
@@ -216,7 +216,7 @@ def check_phone(phone: str) -> str:
             quoted_query = quote_plus(f'"{query}"')
             url = f"https://html.duckduckgo.com/html/?q={quoted_query}"
             try:
-                r = requests.get(url, headers=headers, timeout=10)
+                r = get_http().get(url, headers=headers, timeout=10)
                 if r.status_code in (403, 429):
                     return {"status": "blocked", "count": result_count, "matches": matches}
                 if r.status_code != 200:
@@ -258,7 +258,7 @@ def check_phone(phone: str) -> str:
     def check_breaches(digits):
         url = f"https://api.xposedornot.com/v1/phone/{digits}"
         try:
-            r = requests.get(url, headers=headers, timeout=10)
+            r = get_http().get(url, headers=headers, timeout=10)
             if r.status_code == 404:
                 return "No public breach data found via XposedOrNot"
             if r.status_code in (401, 403):

@@ -27,6 +27,10 @@ htmlcov/
 # Caches
 mitre_cache.json
 api_cache.sqlite
+alert_history.json
+
+# Runtime logs
+threat_intel_log.md
 
 # OS
 .DS_Store

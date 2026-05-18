@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+import stat
 import tempfile
 from datetime import datetime
 
@@ -77,6 +78,11 @@ def fim_add(path):
         allowed = ", ".join(fim_allowed_prefixes())
         return f"❌ Invalid or unauthorized path. Allowed prefixes: `{allowed}`"
     if not os.path.exists(path): return f"❌ File not found: {path}"
+    try:
+        if os.path.isfile(path) and not stat.S_ISREG(os.stat(path).st_mode):
+            return f"❌ Not a regular file (device/special): `{path}`"
+    except OSError as e:
+        return f"❌ Cannot stat: {e}"
     db = load_fim()
     if os.path.isdir(path):
         try:

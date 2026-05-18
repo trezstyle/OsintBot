@@ -1,7 +1,14 @@
 """Threat intelligence package."""
 import logging
 
+import requests
+
 log = logging.getLogger(__name__)
+
+# Shared HTTP session with connection pooling
+_http = requests.Session()
+_http.headers.update({"User-Agent": "CyberVoltSOCBot/3.0"})
+_http.max_redirects = 5
 
 # Optional caching for external API calls (configured once at import time)
 try:
@@ -9,9 +16,15 @@ try:
     requests_cache.install_cache(
         "api_cache", backend="sqlite", expire_after=300,
         allowable_methods=("GET", "HEAD"),
+        session_factory=lambda: _http,
     )
 except ImportError:
     log.debug("requests_cache not installed; API caching disabled")
+
+
+def get_http() -> requests.Session:
+    """Return the shared HTTP session. Use from submodules instead of raw requests.get()."""
+    return _http
 
 # Re-export all public functions for backward compatibility.
 # Each sub-module is focused on a specific category of checks.

@@ -8,10 +8,15 @@ import socket
 import ssl
 import subprocess
 
-import requests
 import whois
 
 from config import settings
+from services.threat_intel import get_http
+
+try:
+    import dns.resolver
+except ImportError:
+    dns = None
 
 try:
     import dns.resolver
@@ -55,7 +60,7 @@ def get_abuseipdb_report(ip):
     if not key:
         return "AbuseIPDB: No API key"
     try:
-        r = requests.get(
+        r = get_http().get(
             "https://api.abuseipdb.com/api/v2/check",
             headers={"Key": key, "Accept": "application/json"},
             params={"ipAddress": ip, "maxAgeInDays": "90", "verbose": ""},
@@ -78,7 +83,7 @@ def get_abuseipdb_report(ip):
 
 def get_geoip(ip):
     try:
-        r = requests.get(f"https://ipinfo.io/{ip}/json", timeout=5)
+        r = get_http().get(f"https://ipinfo.io/{ip}/json", timeout=5)
         if r.status_code == 200:
             d = r.json()
             return (
@@ -142,7 +147,7 @@ def get_whois(domain):
 
 def get_subdomains(domain):
     try:
-        r = requests.get(
+        r = get_http().get(
             f"https://crt.sh/?q={domain}&output=json",
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=10,
@@ -162,10 +167,14 @@ def check_ssl(domain: str) -> str:
     domain = domain.strip().replace("https://", "").replace("http://", "").split("/")[0]
     try:
         ctx = ssl.create_default_context()
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        ctx.check_hostname = True
         with ctx.wrap_socket(socket.socket(), server_hostname=domain) as s:
             s.settimeout(10)
             s.connect((domain, 443))
             cert = s.getpeercert()
+            protocol = s.version()
+            cipher = s.cipher()[0]
 
         def cert_name(items):
             for group in items or []:
@@ -184,17 +193,21 @@ def check_ssl(domain: str) -> str:
         days_remaining = (expiry - datetime.utcnow()).days
         status = "Valid" if days_remaining >= 0 else "Expired"
         emoji = "🟢" if days_remaining > 14 else "🟡" if days_remaining >= 0 else "🔴"
+        chain_status = "⚠ Self-signed/root" if subject == issuer else "✅ Valid"
 
         return (
             f"{emoji} *SSL Check: `{domain}`*\n"
-            f"Status: `{status}`\n"
-            f"Days remaining: `{days_remaining}`\n"
-            f"Valid from: `{valid_from}`\n"
-            f"Valid to: `{valid_to}`\n"
+            f"Status: `{status}` ({days_remaining}d)\n"
+            f"From: `{valid_from}`\n"
+            f"Till: `{valid_to}`\n"
             f"Issuer: `{issuer}`\n"
             f"Subject: `{subject}`\n"
-            f"SANs: `{len(sans)}`"
+            f"SANs: `{len(sans)}`\n"
+            f"TLS: `{protocol}` | Cipher: `{cipher}`\n"
+            f"Chain: {chain_status}"
         )
+    except ssl.SSLCertVerificationError as e:
+        return f"🔴 *SSL Check: `{domain}`*\nChain invalid: `{e}`"
     except (ConnectionError, socket.timeout, ssl.SSLError, OSError) as e:
         log.error("check_ssl(%s) error: %s", domain, e)
         return f"🔴 *SSL Check: `{domain}`*\nFailed: `{e}`"
@@ -209,7 +222,7 @@ def check_ssl(domain: str) -> str:
 def check_http_headers(url: str) -> str:
     target = url.strip().replace("https://", "").replace("http://", "").split("/")[0]
     try:
-        r = requests.get(f"https://{target}", timeout=10, allow_redirects=True)
+        r = get_http().get(f"https://{target}", timeout=10, allow_redirects=True)
         headers = r.headers
 
         hsts = headers.get("Strict-Transport-Security", "")
@@ -312,7 +325,7 @@ def check_tor(ip: str) -> str:
         bulk_match = False
         if not listed_ports:
             try:
-                r = requests.get("https://check.torproject.org/torbulkexitlist", timeout=10)
+                r = get_http().get("https://check.torproject.org/torbulkexitlist", timeout=10)
                 if r.status_code == 200:
                     bulk_match = ip in r.text.splitlines()
             except requests.RequestException as e:
@@ -351,7 +364,7 @@ def check_proxy(ip: str) -> str:
             return f"❌ Invalid IP address: `{ip}`"
 
         fields = "status,message,country,regionName,city,isp,org,as,proxy,hosting,query,countryCode"
-        r = requests.get(f"http://ip-api.com/json/{ip}?fields={fields}", timeout=10)
+        r = get_http().get(f"http://ip-api.com/json/{ip}?fields={fields}", timeout=10)
         data = r.json()
         if data.get("status") != "success":
             return f"🌐 *Proxy Check: `{ip}`*\nLookup failed: `{data.get('message', 'unknown error')}`"
@@ -383,7 +396,7 @@ def check_ctlogs(domain: str) -> str:
         if not domain or "." not in domain:
             return f"❌ Invalid domain: `{domain}`"
 
-        r = requests.get(
+        r = get_http().get(
             f"https://crt.sh/?q=%25.{domain}&output=json",
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=15,

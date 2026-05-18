@@ -9,6 +9,7 @@ import security
 from config import settings
 from services.fim import fim_add, fim_check
 from services.notifier import init_bot
+from services.alert_store import get_alerts, get_history, record_command
 from services.rate_limit import _get_user_id, _heavy, _limiter_for, rate_limit
 from services.reporting import generate_report
 from services.scanner import scan_network
@@ -31,20 +32,20 @@ _CMD_TABLE = {
     "ssl": {
         "fn": check_ssl,
         "prompt": "🔒 *Enter domain for SSL check:*",
-        "validate": "validate_domain",
+        "validate": security.validate_domain,
         "success_msg": "🔒 *Checking SSL for `{arg}`...*",
     },
     "httpcheck": {
         "fn": check_http_headers,
         "prompt": "🛡 *Enter domain or URL for HTTP header check:*",
-        "validate": "validate_domain",
+        "validate": security.validate_domain,
         "validate_transform": lambda a: a.replace("https://", "").replace("http://", "").split("/")[0] if a else a,
         "success_msg": "🛡 *Checking HTTP headers for `{arg}`...*",
     },
     "bl": {
         "fn": check_blacklist,
         "prompt": "⚫ *Enter IP address for blacklist check:*",
-        "validate": "validate_ip",
+        "validate": security.validate_ip,
         "success_msg": "⚫ *Checking DNSBLs for `{arg}`...*",
     },
     "email": {
@@ -56,19 +57,19 @@ _CMD_TABLE = {
     "tor": {
         "fn": check_tor,
         "prompt": "🔍 *Enter IP address for Tor check:*",
-        "validate": "validate_ip",
+        "validate": security.validate_ip,
         "success_msg": "🔍 *Checking Tor exit status for `{arg}`...*",
     },
     "proxy": {
         "fn": check_proxy,
         "prompt": "🌐 *Enter IP address for Proxy/VPN check:*",
-        "validate": "validate_ip",
+        "validate": security.validate_ip,
         "success_msg": "🌐 *Checking Proxy/VPN status for `{arg}`...*",
     },
     "ctlogs": {
         "fn": check_ctlogs,
         "prompt": "📜 *Enter domain for CT logs:*",
-        "validate": "validate_domain",
+        "validate": security.validate_domain,
         "success_msg": "📜 *Checking CT logs for `{arg}`...*",
     },
     "phone": {
@@ -80,7 +81,7 @@ _CMD_TABLE = {
     "whois": {
         "fn": get_whois,
         "prompt": "🕵️ *Enter a domain for WHOIS:*",
-        "validate": "validate_domain",
+        "validate": security.validate_domain,
         "success_msg": None,
     },
     "hash": {
@@ -108,32 +109,50 @@ _CMD_TABLE = {
 # ── Markdown escaping ──
 
 def escape_md(text: str) -> str:
-    for ch in ("_", "*", "`", "["):
+    for ch in ("_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"):
         text = text.replace(ch, "\\" + ch)
     return text
 
 
 # ── Message length helper ──
 
+def _close_code_blocks(text):
+    """Ensure code block balance — close if odd number of ``` triples."""
+    return text + "\n```" if text.count("```") % 2 else text
+
+
 def send_long_message(chat_id, text, parse_mode=None, reply_markup=None):
     if len(text) <= MAX_MSG_LEN:
         return bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
-    else:
-        parts = []
-        while text:
-            if len(text) <= MAX_MSG_LEN:
-                parts.append(text)
-                break
-            split_at = text.rfind("\n", 0, MAX_MSG_LEN)
+    parts = []
+    while text:
+        if len(text) <= MAX_MSG_LEN:
+            parts.append(text)
+            break
+        split_at = text.rfind("\n", 0, MAX_MSG_LEN)
+        if split_at == -1:
+            split_at = MAX_MSG_LEN
+        chunk = text[:split_at]
+        # If code block is opened but not closed in this chunk, close it
+        if chunk.count("```") % 2:
+            chunk += "\n```"
+            # Re-find split to avoid exceeding limit after adding ```
+            split_at = text.rfind("\n", 0, split_at + 4)
             if split_at == -1:
-                split_at = MAX_MSG_LEN
-            parts.append(text[:split_at])
-            text = text[split_at:]
-        msg = None
-        for i, part in enumerate(parts):
-            markup = reply_markup if i == len(parts) - 1 else None
-            msg = bot.send_message(chat_id, part, parse_mode=parse_mode, reply_markup=markup)
-        return msg
+                split_at = text.find("\n", split_at + 4)
+                if split_at == -1:
+                    split_at = MAX_MSG_LEN
+            chunk = text[:split_at]
+            if chunk.count("```") % 2:
+                chunk += "\n```"
+        parts.append(chunk)
+        text = text[split_at:]
+    msg = None
+    for i, part in enumerate(parts):
+        markup = reply_markup if i == len(parts) - 1 else None
+        part = _close_code_blocks(part)
+        msg = bot.send_message(chat_id, part, parse_mode=parse_mode, reply_markup=markup)
+    return msg
 
 
 # ── Authorization decorator ──
@@ -167,16 +186,10 @@ def is_message_authorized(m):
 
 def is_callback_authorized(call):
     user_id = getattr(getattr(call, "from_user", None), "id", None)
-    message = getattr(call, "message", None)
-    chat_id = getattr(getattr(message, "chat", None), "id", None)
-    if security.is_authorized(user_id, chat_id):
+    if security.is_authorized(user_id, None):
         return True
     try:
         bot.answer_callback_query(call.id, text="❌ Unauthorized")
-    except Exception:
-        pass
-    try:
-        bot.send_message(chat_id, UNAUTHORIZED_TEXT)
     except Exception:
         pass
     return False
@@ -199,16 +212,24 @@ def cmd_start(m):
     bot.reply_to(m, f"{LOGO}\n🤖 *Cyber-Volt SOC Master v3.0*\n\nFull-featured SOC platform in Telegram.\n\nUse /start to open the menu.", parse_mode="Markdown", reply_markup=help_keyboard())
 
 
-@bot.message_handler(commands=["status", "top", "logs", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth", "email", "tor", "proxy", "ctlogs", "phone", "fw", "compliance", "hash", "urlscan", "attack"])
+@bot.message_handler(commands=["status", "top", "logs", "whois", "recon", "scan", "fim", "cve", "hibp", "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth", "email", "tor", "proxy", "ctlogs", "phone", "fw", "compliance", "hash", "urlscan", "attack", "job"])
 @authorized_message
 def cmd_handler(m):
     _set_alert_chat_id(m.chat.id)
     cmd = m.text.split()[0].replace("/", "")
     args = m.text.split()[1:]
 
+    # Record command history
+    record_command(
+        getattr(getattr(m, "from_user", None), "id", None),
+        getattr(getattr(m, "from_user", None), "username", None),
+        cmd,
+        " ".join(args),
+    )
+
     # Rate-limit heavy commands
     uid = _get_user_id(m)
-    if cmd in ("scan", "report") and uid is not None:
+    if cmd in ("scan", "report", "fw", "compliance") and uid is not None:
         if not _heavy.is_allowed(uid):
             bot.reply_to(m, "⚠️ *Rate limit reached.* This command can be used once every 5 minutes.", parse_mode="Markdown")
             return
@@ -288,15 +309,48 @@ def cmd_handler(m):
                         t = a["time"].strftime("%H:%M:%S")
                         lines.append(f"`{t}` {escape_md(a['line'][:80])}")
                     send_long_message(m.chat.id, "\n".join(lines), parse_mode="Markdown")
+        elif cmd == "history":
+            sub = args[0] if args else "commands"
+            if sub == "alerts":
+                alerts = get_alerts(15)
+                if not alerts:
+                    bot.reply_to(m, "📋 *Alert History*\nNo alerts recorded yet.", parse_mode="Markdown")
+                else:
+                    lines = ["📋 *Recent Alerts*", f"Total: {len(alerts)}\n"]
+                    for a in alerts:
+                        t = a.get("time", "?")[11:19]
+                        s = escape_md(a.get("line", "?")[:80])
+                        lines.append(f"`{t}` {s}")
+                    send_long_message(m.chat.id, "\n".join(lines), parse_mode="Markdown")
+            else:
+                entries = get_history(15)
+                if not entries:
+                    bot.reply_to(m, "📋 *Command History*\nNo commands recorded yet.", parse_mode="Markdown")
+                else:
+                    lines = ["📋 *Recent Commands*", f"Total: {len(entries)}\n"]
+                    for e in entries:
+                        t = e.get("time", "?")[11:19]
+                        u = escape_md(e.get("username", "?")[:15])
+                        c = escape_md(e.get("cmd", "?"))
+                        a = escape_md(e.get("args", "")[:30])
+                        lines.append(f"`{t}` *{c}* {a} — {u}")
+                    send_long_message(m.chat.id, "\n".join(lines), parse_mode="Markdown")
+        elif cmd == "job":
+            from services.job_queue import format_job_status
+            job_id = args[0] if args else ""
+            if not job_id:
+                bot.reply_to(m, "ℹ️ Usage: `/job <id>` — check the status of a running job.", parse_mode="Markdown")
+            else:
+                send_long_message(m.chat.id, format_job_status(job_id), parse_mode="Markdown")
         elif cmd in _CMD_TABLE:
             config = _CMD_TABLE[cmd]
             if args:
                 arg = args[0]
-                validate_fn_name = config.get("validate")
-                if validate_fn_name:
+                validate_fn = config.get("validate")
+                if validate_fn:
                     transform = config.get("validate_transform")
                     check_arg = transform(arg) if transform else arg
-                    if not getattr(security, validate_fn_name)(check_arg):
+                    if not validate_fn(check_arg):
                         bot.reply_to(m, f"❌ Invalid input: `{arg}`")
                         return
                 send_long_message(m.chat.id, config["fn"](arg), parse_mode="Markdown")
@@ -405,7 +459,7 @@ def handle_callback(call):
                         lines.append(f"`{t}` {escape_md(a['line'][:100])}")
                     send_long_message(cid, "\n".join(lines), parse_mode="Markdown")
         elif cmd == "menu": send_long_message(cid, menu_text(), parse_mode="Markdown", reply_markup=help_keyboard())
-        elif cmd == "hello": cmd_start(call.message)
+
     except Exception as e:
         log.error("callback error (%s): %s", cmd, e)
         try:
@@ -611,11 +665,11 @@ def process_from_table(m, cmd):
     if not arg:
         bot.reply_to(m, "❌ Nothing entered.")
         return
-    validate_fn_name = config.get("validate")
-    if validate_fn_name:
+    validate_fn = config.get("validate")
+    if validate_fn:
         transform = config.get("validate_transform")
         check_arg = transform(arg) if transform else arg
-        if not getattr(security, validate_fn_name)(check_arg):
+        if not validate_fn(check_arg):
             bot.reply_to(m, f"❌ Invalid input: `{arg}`")
             return
     success_msg = config.get("success_msg")

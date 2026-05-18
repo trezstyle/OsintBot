@@ -1,22 +1,16 @@
 """MITRE ATT&CK technique lookup and attack simulation."""
 import json
 import logging
-import os
 import time
 from pathlib import Path
 
-import requests
-
 from config import settings
+from services.threat_intel import get_http
 from services.threat_intel.reputation import _strip_html
 
 log = logging.getLogger("cyber_volt")
 
-MITRE_CACHE = (
-    os.path.join(os.path.dirname(settings.paths.base_dir), "mitre_cache.json")
-    if hasattr(settings.paths, 'base_dir')
-    else "mitre_cache.json"
-)
+MITRE_CACHE = str(settings.paths.base_dir / "mitre_cache.json")
 MITRE_TTL = 86400
 
 
@@ -28,7 +22,7 @@ def _load_mitre():
         except (json.JSONDecodeError, OSError):
             pass
     try:
-        r = requests.get(
+        r = get_http().get(
             "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json",
             timeout=30,
         )
