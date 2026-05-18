@@ -105,6 +105,14 @@ _CMD_TABLE = {
 }
 
 
+# ── Markdown escaping ──
+
+def escape_md(text: str) -> str:
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, "\\" + ch)
+    return text
+
+
 # ── Message length helper ──
 
 def send_long_message(chat_id, text, parse_mode=None, reply_markup=None):
@@ -278,7 +286,7 @@ def cmd_handler(m):
                     lines = ["📋 *Recent Suricata Alerts*", f"Total: {len(suricata_alerts)} alerts\n"]
                     for a in reversed(suricata_alerts[-10:]):
                         t = a["time"].strftime("%H:%M:%S")
-                        lines.append(f"`{t}` {a['line'][:80]}")
+                        lines.append(f"`{t}` {escape_md(a['line'][:80])}")
                     send_long_message(m.chat.id, "\n".join(lines), parse_mode="Markdown")
         elif cmd in _CMD_TABLE:
             config = _CMD_TABLE[cmd]
@@ -389,12 +397,12 @@ def handle_callback(call):
         elif cmd == "alerts":
             with suricata_lock:
                 if not suricata_alerts:
-                    bot.send_message(cid, "📋 *Suricata Alerts*\nNo alerts yet. Suricata must be installed first.", parse_mode="Markdown")
+                    bot.send_message(cid, "📋 *Suricata Alerts* — buffer empty. Suricata is running, pass rules suppress Telegram noise.", parse_mode="Markdown")
                 else:
                     lines = ["📋 *Recent Suricata Alerts*\n"]
                     for a in reversed(suricata_alerts[-15:]):
                         t = a["time"].strftime("%H:%M:%S")
-                        lines.append(f"`{t}` {a['line'][:100]}")
+                        lines.append(f"`{t}` {escape_md(a['line'][:100])}")
                     send_long_message(cid, "\n".join(lines), parse_mode="Markdown")
         elif cmd == "menu": send_long_message(cid, menu_text(), parse_mode="Markdown", reply_markup=help_keyboard())
         elif cmd == "hello": cmd_start(call.message)
