@@ -108,7 +108,7 @@ def format_top(sort_by="cpu"):
             f"┌{'─' * 36}┐\n"
             f"│ CPU {_bar(total_cpu):<10} {total_cpu:>5.1f}% │\n"
             f"│ RAM {_bar(mem.percent):<10} {mem.percent:>5.1f}% │\n"
-            f"│ Load `{load[0]:.2f}` · Procs `{total_procs}`{' ' * 14}│\n"
+            f"│ Load {load[0]:.2f} · Procs {total_procs}{' ' * 18}│\n"
             f"└{'─' * 36}┘\n"
         )
 
@@ -119,7 +119,7 @@ def format_top(sort_by="cpu"):
             cmd = p["cmd"][:40]
             rows.append(
                 f"{emoji} `{p['pid']:>6}` {p['cpu']:>5.1f}% {p['mem']:>5.1f}% "
-                f"`{rss_fmt:>5}`  {cmd}"
+                f"`{rss_fmt:>5}`  `{cmd}`"
             )
 
         sort_labels = {"cpu": "CPU ⬇", "ram": "RAM", "pid": "PID", "name": "Name"}
@@ -128,7 +128,7 @@ def format_top(sort_by="cpu"):
             for k, label in sort_labels.items()
         )
 
-        return header + "```\n" + "\n".join(rows) + "\n```\n" + sort_line
+        return header + "\n".join(rows) + "\n\n" + sort_line
     except Exception as e:
         log.error(f"format_top error: {e}")
         return f"Top failed: {e}"
