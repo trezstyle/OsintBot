@@ -365,12 +365,8 @@ def handle_callback(call):
         elif cmd == "status": send_long_message(cid, format_status(), parse_mode="Markdown")
         elif cmd in ("top", "top_cpu", "top_ram", "top_pid", "top_name"):
             sort = cmd.split("_")[-1] if "_" in cmd else "cpu"
-            text = format_top(sort)
-            kb = top_keyboard(sort)
-            try:
-                bot.edit_message_text(text, cid, call.message.message_id, parse_mode="Markdown", reply_markup=kb)
-            except Exception:
-                send_long_message(cid, text, parse_mode="Markdown", reply_markup=kb)
+            send_long_message(cid, format_top(sort), parse_mode="Markdown",
+                              reply_markup=top_keyboard(sort))
         elif cmd == "bandwidth": send_long_message(cid, format_bandwidth(), parse_mode="Markdown")
         elif cmd == "fw": send_long_message(cid, format_firewall(), parse_mode="Markdown")
         elif cmd == "compliance": send_long_message(cid, format_compliance(), parse_mode="Markdown")
