@@ -89,3 +89,47 @@ def top_keyboard(current_sort="cpu"):
         [InlineKeyboardButton(text="🔙 Menu", callback_data="h_menu")],
     ])
     return kb
+
+
+def calendar_keyboard(year: int, month: int, task_days: list[int]) -> InlineKeyboardMarkup:
+    """Calendar month view. task_days = day numbers with deadlines."""
+    import calendar
+    cal = calendar.Calendar()
+    days = list(cal.itermonthdays(year, month))
+    weeks: list[list[int]] = []
+    for i in range(0, len(days), 7):
+        weeks.append(days[i:i + 7])
+
+    kb = []
+    kb.append([InlineKeyboardButton(text=f"📅 {calendar.month_name[month]} {year}", callback_data="cal_ignore")])
+    kb.append([
+        InlineKeyboardButton(text="Mo", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="Tu", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="We", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="Th", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="Fr", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="Sa", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="Su", callback_data="cal_ignore"),
+    ])
+    for week in weeks:
+        row = []
+        for d in week:
+            if d == 0:
+                row.append(InlineKeyboardButton(text=" ", callback_data="cal_ignore"))
+            else:
+                has_task = "📌" if d in task_days else ""
+                text = f"{d}{has_task}" if has_task else str(d)
+                row.append(InlineKeyboardButton(text=text, callback_data=f"cal_day_{year}_{month}_{d}"))
+        kb.append(row)
+    nav = []
+    prev_m = month - 1 if month > 1 else 12
+    prev_y = year if month > 1 else year - 1
+    next_m = month + 1 if month < 12 else 1
+    next_y = year if month < 12 else year + 1
+    nav.append(InlineKeyboardButton(text="◀", callback_data=f"cal_month_{prev_y}_{prev_m}"))
+    nav.append(InlineKeyboardButton(text="Today", callback_data="cal_today"))
+    nav.append(InlineKeyboardButton(text="▶", callback_data=f"cal_month_{next_y}_{next_m}"))
+    kb.append(nav)
+    kb.append([InlineKeyboardButton(text="➕ New Task", callback_data="h_task_add")])
+    kb.append([InlineKeyboardButton(text="🔙 Menu", callback_data="h_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)

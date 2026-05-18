@@ -53,6 +53,7 @@ from services.metrics import (
 from services.database import init_db
 from services.fim import fim_check
 from services.notifier import init_bot
+from services.tasks import start_scheduler
 from watchers import alert_watcher, suricata_watcher
 
 # ── Web dashboard ──
@@ -123,6 +124,8 @@ async def set_commands(bot: Bot):
         BotCommand(command="job", description="🔍 Check status of a running job"),
         BotCommand(command="history", description="📋 Show command history or /history alerts"),
         BotCommand(command="users", description="👥 Manage users (admin only)"),
+        BotCommand(command="task", description="📅 Task planner: /task, /task add ..., /task today"),
+        BotCommand(command="tasks", description="📋 List tasks by status: /tasks pending"),
     ]
     await bot.set_my_commands(data)
     log.info(f"Set {len(data)} BotFather commands")
@@ -191,6 +194,7 @@ async def main():
     atexit.register(cleanup_pid)
 
     init_db()
+    start_scheduler()
 
     from runtime import create_dispatcher
     dp = create_dispatcher(bot)

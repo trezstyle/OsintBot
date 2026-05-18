@@ -62,6 +62,18 @@ def init_db() -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            deadline TEXT,
+            priority TEXT DEFAULT 'medium',
+            status TEXT DEFAULT 'pending',
+            created TEXT NOT NULL,
+            reminder_minutes INTEGER DEFAULT 1440,
+            reminded INTEGER DEFAULT 0
+        );
     """)
     db.commit()
     log.info("Database initialized at %s", _DB_PATH)

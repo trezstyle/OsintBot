@@ -1,6 +1,7 @@
 """Telegram UI handlers for Cyber-Volt SOC Bot (aiogram 3.x)."""
 import logging
 import time
+from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
@@ -284,6 +285,7 @@ COMMAND_LIST = [
     "mitre", "report", "alerts", "ssl", "httpcheck", "bl", "bandwidth",
     "email", "tor", "proxy", "ctlogs", "phone", "fw", "compliance",
     "hash", "urlscan", "attack", "job", "history", "users",
+    "task", "tasks",
 ]
 
 
@@ -447,6 +449,99 @@ async def cmd_handler(message: Message, command: CommandObject, state: FSMContex
                 await message.answer(t("job_usage"), parse_mode="Markdown")
             else:
                 await send_long_message(message.chat.id, format_job_status(job_id), parse_mode="Markdown")
+        elif cmd in ("task", "tasks"):
+            from services.tasks import (add_task, build_calendar_data, delete_task, format_task,
+                                        format_task_list, get_task, list_tasks,
+                                        tasks_with_deadlines_in_month, update_task)
+            from ui.keyboards import calendar_keyboard
+            uid = getattr(getattr(message, "from_user", None), "id", None)
+            now = datetime.now()
+            if not args:
+                cal = build_calendar_data(now.year, now.month)
+                task_days = tasks_with_deadlines_in_month(uid, now.year, now.month)
+                await message.answer(
+                    f"📅 *{cal['month_name']} {cal['year']}*",
+                    parse_mode="Markdown",
+                    reply_markup=calendar_keyboard(now.year, now.month, task_days),
+                )
+            elif args[0] == "add":
+                title = " ".join(args[1:]) if len(args) > 1 else ""
+                if not title:
+                    await message.answer("Usage: `/task add <title> | deadline: YYYY-MM-DD HH:MM | priority: low|medium|high|critical | desc: ...`", parse_mode="Markdown")
+                else:
+                    parts = title.split("|")
+                    ttl = parts[0].strip()
+                    deadline = None
+                    priority = "medium"
+                    description = ""
+                    reminder = 1440
+                    for p in parts[1:]:
+                        p = p.strip()
+                        if p.startswith("deadline:"):
+                            deadline = p[len("deadline:"):].strip()
+                        elif p.startswith("priority:"):
+                            priority = p[len("priority:"):].strip().lower()
+                            if priority not in ("low", "medium", "high", "critical"):
+                                priority = "medium"
+                        elif p.startswith("desc:"):
+                            description = p[len("desc:"):].strip()
+                        elif p.startswith("remind:"):
+                            try:
+                                reminder = int(p[len("remind:"):].strip()) * 60
+                            except ValueError:
+                                reminder = 1440
+                    tid = add_task(uid, ttl, description, deadline, priority, reminder)
+                    await message.answer(f"✅ Task created (#{tid})", parse_mode="Markdown")
+            elif args[0] == "done" and len(args) >= 2:
+                try:
+                    tid = int(args[1])
+                    if update_task(tid, status="done"):
+                        await message.answer(f"✅ Task #{tid} marked as done")
+                    else:
+                        await message.answer(f"❌ Task #{tid} not found")
+                except ValueError:
+                    await message.answer("❌ Invalid task ID")
+            elif args[0] == "del" and len(args) >= 2:
+                try:
+                    tid = int(args[1])
+                    t = get_task(tid)
+                    if t and t["user_id"] != uid:
+                        await message.answer("❌ Not your task")
+                        return
+                    if delete_task(tid):
+                        await message.answer(f"🗑 Task #{tid} deleted")
+                    else:
+                        await message.answer(f"❌ Task #{tid} not found")
+                except ValueError:
+                    await message.answer("❌ Invalid task ID")
+            elif args[0] in ("today", "overdue", "week", "pending", "done", "in_progress", "cancelled"):
+                sub = args[0]
+                if sub == "today":
+                    today = now.strftime("%Y-%m-%d")
+                    items = tasks_for_date(uid, today)
+                    await send_long_message(message.chat.id, format_task_list(items, f"📋 Tasks for {today}"), parse_mode="Markdown")
+                elif sub == "overdue":
+                    items = list_tasks(user_id=uid, status="pending", due_before=now.isoformat())
+                    await send_long_message(message.chat.id, format_task_list(items, "⚠ Overdue Tasks"), parse_mode="Markdown")
+                elif sub == "week":
+                    end = (now + timedelta(days=7)).isoformat()
+                    items = list_tasks(user_id=uid, due_before=end, due_after=now.isoformat())
+                    await send_long_message(message.chat.id, format_task_list(items, "📋 Tasks This Week"), parse_mode="Markdown")
+                else:
+                    items = list_tasks(user_id=uid, status=sub)
+                    await send_long_message(message.chat.id, format_task_list(items, f"📋 Tasks: {sub}"), parse_mode="Markdown")
+            else:
+                try:
+                    tid = int(args[0])
+                    t = get_task(tid)
+                    if not t:
+                        await message.answer(f"❌ Task #{tid} not found")
+                    elif t["user_id"] != uid:
+                        await message.answer("❌ Not your task")
+                    else:
+                        await send_long_message(message.chat.id, format_task(t), parse_mode="Markdown")
+                except ValueError:
+                    await message.answer("Usage: `/task <id>`, `/task add ...`, `/task today`, `/task overdue`, `/task done <id>`, `/task del <id>`", parse_mode="Markdown")
         elif cmd in _CMD_TABLE:
             config = _CMD_TABLE[cmd]
             if args:
@@ -492,6 +587,55 @@ async def auto_threat_hunt(message: Message):
         await message.answer(f"🌐 *Domain detected:* `{domain}`\nRunning recon...", parse_mode="Markdown")
         await send_long_message(message.chat.id, threat_hunt_domain(domain), parse_mode="Markdown")
         return
+
+
+# ── Calendar callbacks ──
+
+@router.callback_query(lambda c: c.data and c.data.startswith("cal_"))
+@authorized_callback
+async def handle_calendar(call: CallbackQuery):
+    from services.tasks import build_calendar_data, format_task, format_task_list, get_task, tasks_for_date, tasks_with_deadlines_in_month
+    from ui.keyboards import calendar_keyboard
+    parts = call.data.split("_")
+    cmd = parts[1]
+    uid = getattr(getattr(call, "from_user", None), "id", None)
+    now = datetime.now()
+
+    try:
+        if cmd == "month":
+            y, m = int(parts[2]), int(parts[3])
+            task_days = tasks_with_deadlines_in_month(uid, y, m)
+            cal = build_calendar_data(y, m)
+            await call.message.edit_text(
+                f"📅 *{cal['month_name']} {cal['year']}*",
+                parse_mode="Markdown",
+                reply_markup=calendar_keyboard(y, m, task_days),
+            )
+        elif cmd == "today":
+            y, m, d = now.year, now.month, now.day
+            task_days = tasks_with_deadlines_in_month(uid, y, m)
+            cal = build_calendar_data(y, m)
+            await call.message.edit_text(
+                f"📅 *{cal['month_name']} {cal['year']}*",
+                parse_mode="Markdown",
+                reply_markup=calendar_keyboard(y, m, task_days),
+            )
+        elif cmd == "day":
+            y, m, d = int(parts[2]), int(parts[3]), int(parts[4])
+            date_str = f"{y:04d}-{m:02d}-{d:02d}"
+            items = tasks_for_date(uid, date_str)
+            if not items:
+                await call.message.edit_text(f"📅 *{date_str}*\nNo tasks for this day.", parse_mode="Markdown")
+            else:
+                await send_long_message(call.message.chat.id, format_task_list(items, f"📋 Tasks for {date_str}"), parse_mode="Markdown")
+        elif cmd == "ignore":
+            await call.answer()
+            return
+    except Exception as e:
+        log.error("Calendar callback error: %s", e)
+        await call.answer("❌ Error", show_alert=True)
+        return
+    await call.answer()
 
 
 # ── Callbacks ──
