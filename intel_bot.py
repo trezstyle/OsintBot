@@ -1,4 +1,5 @@
-"""Cyber-Volt SOC Bot entry point."""
+"""Cyber-Volt SOC Bot entry point (aiogram 3.x)."""
+import asyncio
 import atexit
 import logging
 import os
@@ -7,7 +8,10 @@ import sys
 import threading
 import time
 
-from telebot.types import BotCommand
+from aiogram import Bot
+from aiogram.types import BotCommand
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 
 from config import settings
 from logging_config import configure_logging
@@ -29,12 +33,12 @@ if settings.api.sentry_dsn:
         log.warning("Sentry init failed: %s", e)
 
 # ── i18n ──
-from services.i18n import set_locale  # noqa: E402
+from services.i18n import set_locale
 
 set_locale(settings.api.locale)
 
 # ── Metrics ──
-from services.metrics import (  # noqa: E402
+from services.metrics import (
     alerts_total,
     callback_total,
     cmd_duration,
@@ -45,11 +49,12 @@ from services.metrics import (  # noqa: E402
 )
 
 # ── Core imports ──
-from runtime import polling_loop  # noqa: E402
+from services.fim import fim_check
+from services.notifier import init_bot
+from watchers import alert_watcher, suricata_watcher
 
-from services.fim import fim_check  # noqa: E402
-from ui.handlers import bot  # noqa: E402
-from watchers import alert_watcher, suricata_watcher  # noqa: E402
+# ── Web dashboard ──
+from services.web_api import start_dashboard
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -88,38 +93,35 @@ def cleanup_pid():
         pass
 
 
-def cleanup_webhook():
-    log.info("Cleaning up stale sessions...")
-    for attempt in range(5):
-        try:
-            bot.remove_webhook()
-            log.info(f"Webhook removed (attempt {attempt + 1})")
-            return
-        except Exception as e:
-            log.warning(f"remove_webhook error: {e}")
-            time.sleep(3)
-
-
-def set_commands():
+async def set_commands(bot: Bot):
     data = [
-        ("start", "🤖 Start the bot / greeting"),
-        ("status", "🖥 System dashboard (CPU/RAM/Disk)"),
-        ("logs", "📜 Log analysis (failed/sudo/ssh/attack)"),
-        ("scan", "🕸 Network scan (fast / full)"), ("whois", "🏢 WHOIS lookup by domain"),
-        ("recon", "🌐 Domain / IP reconnaissance"), ("fim", "📋 File Integrity Monitor (add/check)"),
-        ("cve", "🧠 CVE vulnerability check for package"), ("hibp", "🔐 Breach search (email/domain)"),
-        ("ssl", "🔒 SSL certificate check"), ("httpcheck", "🛡 HTTP security headers check"),
-        ("bl", "⚫ DNSBL blacklist check"), ("bandwidth", "🌐 Network bandwidth by interface"),
-        ("email", "📧 Email OSINT report"),
-        ("tor", "🔍 Tor exit node check"), ("proxy", "🌐 Proxy/VPN and hosting check"),
-        ("ctlogs", "📜 Certificate Transparency log summary"), ("phone", "📞 Phone number OSINT"),
-        ("fw", "🛡 UFW firewall status and confirmed changes"), ("compliance", "✅ CIS compliance check"),
-        ("mitre", "🧬 MITRE ATT&CK technique search"), ("report", "📄 Generate PDF report"),
-        ("alerts", "🚨 View Suricata IDS alerts"),
-        ("job", "🔍 Check status of a running job (e.g. /job abc123)"),
-        ("history", "📋 Show command history or /history alerts"),
+        BotCommand(command="start", description="🤖 Start the bot / greeting"),
+        BotCommand(command="status", description="🖥 System dashboard (CPU/RAM/Disk)"),
+        BotCommand(command="logs", description="📜 Log analysis (failed/sudo/ssh/attack)"),
+        BotCommand(command="scan", description="🕸 Network scan (fast / full)"),
+        BotCommand(command="whois", description="🏢 WHOIS lookup by domain"),
+        BotCommand(command="recon", description="🌐 Domain / IP reconnaissance"),
+        BotCommand(command="fim", description="📋 File Integrity Monitor (add/check)"),
+        BotCommand(command="cve", description="🧠 CVE vulnerability check for package"),
+        BotCommand(command="hibp", description="🔐 Breach search (email/domain)"),
+        BotCommand(command="ssl", description="🔒 SSL certificate check"),
+        BotCommand(command="httpcheck", description="🛡 HTTP security headers check"),
+        BotCommand(command="bl", description="⚫ DNSBL blacklist check"),
+        BotCommand(command="bandwidth", description="🌐 Network bandwidth by interface"),
+        BotCommand(command="email", description="📧 Email OSINT report"),
+        BotCommand(command="tor", description="🔍 Tor exit node check"),
+        BotCommand(command="proxy", description="🌐 Proxy/VPN and hosting check"),
+        BotCommand(command="ctlogs", description="📜 Certificate Transparency log summary"),
+        BotCommand(command="phone", description="📞 Phone number OSINT"),
+        BotCommand(command="fw", description="🛡 UFW firewall status and confirmed changes"),
+        BotCommand(command="compliance", description="✅ CIS compliance check"),
+        BotCommand(command="mitre", description="🧬 MITRE ATT&CK technique search"),
+        BotCommand(command="report", description="📄 Generate PDF report"),
+        BotCommand(command="alerts", description="🚨 View Suricata IDS alerts"),
+        BotCommand(command="job", description="🔍 Check status of a running job"),
+        BotCommand(command="history", description="📋 Show command history or /history alerts"),
     ]
-    bot.set_my_commands([BotCommand(cmd, desc) for cmd, desc in data])
+    await bot.set_my_commands(data)
     log.info(f"Set {len(data)} BotFather commands")
 
 
@@ -134,39 +136,34 @@ def _scheduler():
             log.error("Scheduler FIM failed: %s", e)
 
 
-def _start_webhook():
-    """Start Flask webhook server in background thread."""
-    import flask
-    from telebot.types import Update
-
-    app = flask.Flask(__name__)
-    secret = os.getenv("WEBHOOK_SECRET", "")
-
-    @app.route(f"/webhook/{settings.api.telegram_token}", methods=["POST"])
-    def webhook():
-        if flask.request.headers.get("X-Telegram-Bot-Api-Secret-Token", "") != secret:
-            return "Unauthorized", 403
-        update = Update.de_json(flask.request.get_json(force=True))
-        if update.message:
-            from runtime import dispatch_message
-
-            dispatch_message(bot, update.message)
-        elif update.callback_query:
-            from runtime import dispatch_callback
-
-            dispatch_callback(bot, update.callback_query)
-        return "OK", 200
-
-    app.run(host="0.0.0.0", port=settings.api.webhook_port, debug=False)
-
-
 def _uptime_tracker():
     while True:
         uptime_gauge.set(time.monotonic())
         time.sleep(15)
 
 
-if __name__ == "__main__":
+async def cleanup_webhook(bot: Bot):
+    log.info("Cleaning up stale webhook...")
+    for attempt in range(5):
+        try:
+            await bot.delete_webhook()
+            log.info(f"Webhook removed (attempt {attempt + 1})")
+            return
+        except Exception as e:
+            log.warning(f"delete_webhook error: {e}")
+            await asyncio.sleep(3)
+
+
+async def main():
+    # Build aiogram Bot
+    bot = Bot(token=settings.api.telegram_token, parse_mode="Markdown")
+    init_bot(bot)
+
+    # Patch ui.handlers.bot reference (set by import, but needs actual Bot instance)
+    import ui.handlers as handlers_mod
+    handlers_mod.bot = bot
+
+    # Start background threads
     threading.Thread(target=alert_watcher, daemon=True).start()
     threading.Thread(target=suricata_watcher, daemon=True).start()
     threading.Thread(target=_scheduler, daemon=True).start()
@@ -178,28 +175,49 @@ if __name__ == "__main__":
     except Exception as e:
         log.warning("Metrics server failed: %s", e)
 
+    # Start web dashboard (Flask in background thread)
+    try:
+        if os.getenv("WEB_DASHBOARD_ENABLED", "").lower() in ("1", "true", "yes"):
+            t = threading.Thread(target=start_dashboard, daemon=True)
+            t.start()
+            log.info("Web dashboard started")
+    except Exception as e:
+        log.warning("Web dashboard failed: %s", e)
+
     acquire_pid_guard()
     atexit.register(cleanup_pid)
 
+    from runtime import create_dispatcher
+    dp = create_dispatcher(bot)
+
     # Webhook or polling mode
     if settings.api.webhook_url:
-        cleanup_webhook()
-        bot.set_webhook(
+        await cleanup_webhook(bot)
+        await bot.set_webhook(
             url=f"{settings.api.webhook_url}/webhook/{settings.api.telegram_token}",
             secret_token=os.getenv("WEBHOOK_SECRET", ""),
         )
         log.info("Webhook set to %s", settings.api.webhook_url)
-        try:
-            set_commands()
-        except Exception as e:
-            log.warning("Failed to set BotFather commands: %s", e)
-        _start_webhook()
+        await set_commands(bot)
+
+        app = web.Application()
+        SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=f"/webhook/{settings.api.telegram_token}")
+        setup_application(app, dp, bot=bot)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host="0.0.0.0", port=settings.api.webhook_port)
+        await site.start()
+        log.info("Webhook server on port %d", settings.api.webhook_port)
+        await asyncio.Event().wait()
     else:
-        cleanup_webhook()
-        try:
-            set_commands()
-        except Exception as e:
-            log.warning("Failed to set BotFather commands: %s", e)
-        time.sleep(5)
-        log.info("Starting custom polling loop")
-        polling_loop(bot)
+        await cleanup_webhook(bot)
+        await set_commands(bot)
+        log.info("Starting aiogram polling")
+        await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        log.info("Bot shutting down")

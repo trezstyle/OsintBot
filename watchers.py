@@ -10,7 +10,7 @@ import time
 from config import settings
 from services.alert_store import push_alert
 from services.metrics import alerts_total
-from services.notifier import send_message
+from services.notifier import send_message_sync as send_message
 from services.system import recent_failed_logins
 from services.threat_intel import get_abuseipdb_report, get_geoip, get_vt_report
 

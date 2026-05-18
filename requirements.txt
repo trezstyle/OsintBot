@@ -1,4 +1,5 @@
-pyTelegramBotAPI
+aiogram>=3.0
+aiohttp
 python-dotenv
 psutil
 phonenumbers
