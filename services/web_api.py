@@ -1,4 +1,5 @@
 """Web dashboard API and frontend for Cyber-Volt SOC Bot."""
+import base64
 import html
 import json
 import logging
@@ -23,33 +24,50 @@ def _check_auth():
     auth = flask.request.headers.get("Authorization", "")
     if not _secret:
         return True
-    return auth == f"Bearer {_secret}"
+
+    if auth.startswith("Bearer ") and auth[7:] == _secret:
+        return True
+
+    if auth.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(auth[6:]).decode("utf-8")
+            _, password = decoded.split(":", 1)
+            if password == _secret:
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
-def _require_auth():
+@app.before_request
+def _global_auth():
+    """Require auth on all routes except health check."""
+    if flask.request.endpoint in ("api_health",):
+        return
     if not _check_auth():
-        flask.abort(401)
+        return flask.Response(
+            "Unauthorized", 401,
+            {"WWW-Authenticate": 'Basic realm="Cyber-Volt SOC Dashboard"'}
+        )
 
 
 # ── API endpoints ──
 
 @app.route("/api/status")
 def api_status():
-    _require_auth()
     status = format_status()
     return {"status": "ok", "data": status}
 
 
 @app.route("/api/top")
 def api_top():
-    _require_auth()
     sort = flask.request.args.get("sort", "cpu")
     return {"status": "ok", "data": format_top(sort)}
 
 
 @app.route("/api/alerts")
 def api_alerts():
-    _require_auth()
     with suricata_lock:
         recent = [{"time": a["time"].isoformat() if hasattr(a["time"], "isoformat") else str(a["time"]), "line": a["line"]} for a in reversed(suricata_alerts[-30:])]
     stored = get_alerts(20)
@@ -58,20 +76,17 @@ def api_alerts():
 
 @app.route("/api/history")
 def api_history():
-    _require_auth()
     entries = get_history(30)
     return {"status": "ok", "data": entries}
 
 
 @app.route("/api/bandwidth")
 def api_bandwidth():
-    _require_auth()
     return {"status": "ok", "data": format_bandwidth()}
 
 
 @app.route("/api/compliance")
 def api_compliance():
-    _require_auth()
     return {"status": "ok", "data": format_compliance()}
 
 

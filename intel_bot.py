@@ -9,6 +9,7 @@ import threading
 import time
 
 from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BotCommand
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
@@ -156,7 +157,7 @@ async def cleanup_webhook(bot: Bot):
 
 async def main():
     # Build aiogram Bot
-    bot = Bot(token=settings.api.telegram_token, parse_mode="Markdown")
+    bot = Bot(token=settings.api.telegram_token, default=DefaultBotProperties(parse_mode="Markdown"))
     init_bot(bot)
 
     # Patch ui.handlers.bot reference (set by import, but needs actual Bot instance)
