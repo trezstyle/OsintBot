@@ -18,6 +18,17 @@ from ui.handlers import bot  # noqa: E402
 from watchers import alert_watcher, suricata_watcher  # noqa: E402
 
 
+def _atomic_write(path: Path, content: str) -> None:
+    """Write content atomically using a temporary file."""
+    tmp = path.with_suffix(".pid.tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
 def acquire_pid_guard():
     p = settings.paths.pid_file
     try:
@@ -28,20 +39,19 @@ def acquire_pid_guard():
             old = int(p.read_text(encoding="utf-8").strip())
             try:
                 os.kill(old, 0)
-                log.warning(f"Bot already running (PID {old}), exiting")
+                log.warning("Bot already running (PID %s), exiting", old)
                 sys.exit(0)
             except OSError:
                 pass
-            p.unlink(missing_ok=True)
-            p.write_text(str(os.getpid()), encoding="utf-8")
         except (ValueError, OSError):
-            pass
+            old = None
+        _atomic_write(p, str(os.getpid()))
 
 
 def cleanup_pid():
     try:
         settings.paths.pid_file.unlink(missing_ok=True)
-    except Exception:
+    except OSError:
         pass
 
 

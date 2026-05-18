@@ -8,6 +8,8 @@ import telebot
 import security
 from config import settings
 from services.fim import fim_add, fim_check
+from services.notifier import init_bot
+from services.rate_limit import _get_user_id, _heavy, _limiter_for, rate_limit
 from services.reporting import generate_report
 from services.scanner import scan_network
 from services.system import analyze_logs, check_cve, format_bandwidth, format_compliance, format_firewall, format_status, format_top
@@ -21,6 +23,7 @@ security.load_authorization()
 UNAUTHORIZED_TEXT = settings.unauthorized_text
 
 bot = telebot.TeleBot(settings.api.telegram_token)
+init_bot(bot)
 
 MAX_MSG_LEN = 4096
 
@@ -194,6 +197,13 @@ def cmd_handler(m):
     _set_alert_chat_id(m.chat.id)
     cmd = m.text.split()[0].replace("/", "")
     args = m.text.split()[1:]
+
+    # Rate-limit heavy commands
+    uid = _get_user_id(m)
+    if cmd in ("scan", "report") and uid is not None:
+        if not _heavy.is_allowed(uid):
+            bot.reply_to(m, "⚠️ *Rate limit reached.* This command can be used once every 5 minutes.", parse_mode="Markdown")
+            return
 
     try:
         if cmd == "status": send_long_message(m.chat.id, format_status(), parse_mode="Markdown")
@@ -389,9 +399,11 @@ def handle_callback(call):
         elif cmd == "menu": send_long_message(cid, menu_text(), parse_mode="Markdown", reply_markup=help_keyboard())
         elif cmd == "hello": cmd_start(call.message)
     except Exception as e:
-        log.error(f"callback error ({cmd}): {e}")
-        try: bot.send_message(cid, f"❌ Error: {e}")
-        except: pass
+        log.error("callback error (%s): %s", cmd, e)
+        try:
+            bot.send_message(cid, f"❌ Error: {e}")
+        except Exception:
+            log.exception("Failed to send callback error message")
 
 
 # ── Next-step handlers with input validation ──
