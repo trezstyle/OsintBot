@@ -320,11 +320,11 @@ def task_counts(user_id: int) -> dict[str, int]:
     row = db.execute(
         "SELECT "
         "  COUNT(*) AS total, "
-        "  SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending, "
-        "  SUM(CASE WHEN status='in_progress' THEN 1 ELSE 0 END) AS in_progress, "
-        "  SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done, "
-        "  SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) AS cancelled, "
-        "  SUM(CASE WHEN status='pending' AND deadline IS NOT NULL AND deadline < datetime('now') THEN 1 ELSE 0 END) AS overdue "
+        "  COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END), 0) AS pending, "
+        "  COALESCE(SUM(CASE WHEN status='in_progress' THEN 1 ELSE 0 END), 0) AS in_progress, "
+        "  COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END), 0) AS done, "
+        "  COALESCE(SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END), 0) AS cancelled, "
+        "  COALESCE(SUM(CASE WHEN status='pending' AND deadline IS NOT NULL AND deadline < datetime('now') THEN 1 ELSE 0 END), 0) AS overdue "
         "FROM tasks WHERE user_id=?",
         (user_id,),
     ).fetchone()

@@ -8,6 +8,8 @@ import socket
 import ssl
 import subprocess
 
+import requests
+
 import whois
 
 from config import settings
