@@ -4,6 +4,7 @@ import atexit
 import logging
 import os
 from pathlib import Path
+import signal
 import sys
 import threading
 import time
@@ -19,11 +20,9 @@ from logging_config import configure_logging
 
 log = configure_logging(log_file=settings.paths.bot_log_file)
 
-# ── Sentry ──
 if settings.api.sentry_dsn:
     try:
         import sentry_sdk
-
         sentry_sdk.init(
             dsn=settings.api.sentry_dsn,
             traces_sample_rate=0.1,
@@ -33,12 +32,9 @@ if settings.api.sentry_dsn:
     except Exception as e:
         log.warning("Sentry init failed: %s", e)
 
-# ── i18n ──
 from services.i18n import set_locale
-
 set_locale(settings.api.locale)
 
-# ── Metrics ──
 from services.metrics import (
     alerts_total,
     callback_total,
@@ -49,15 +45,15 @@ from services.metrics import (
     uptime_gauge,
 )
 
-# ── Core imports ──
 from services.database import init_db
 from services.fim import fim_check
 from services.notifier import init_bot
 from services.tasks import start_scheduler
 from watchers import alert_watcher, suricata_watcher
-
-# ── Web dashboard ──
 from services.web_api import start_dashboard
+
+
+SHUTDOWN_SIGNAL = threading.Event()
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -128,24 +124,31 @@ async def set_commands(bot: Bot):
         BotCommand(command="tasks", description="📋 List tasks by status: /tasks pending"),
     ]
     await bot.set_my_commands(data)
-    log.info(f"Set {len(data)} BotFather commands")
 
 
 def _scheduler():
     INTERVAL = 86400
-    while True:
-        time.sleep(INTERVAL)
+    while not SHUTDOWN_SIGNAL.is_set():
+        shutdown_waited = SHUTDOWN_SIGNAL.wait(INTERVAL)
+        if shutdown_waited:
+            break
         try:
-            log.info("Scheduler: running scheduled FIM check")
             fim_check()
         except Exception as e:
             log.error("Scheduler FIM failed: %s", e)
 
 
 def _uptime_tracker():
-    while True:
+    while not SHUTDOWN_SIGNAL.is_set():
         uptime_gauge.set(time.monotonic())
-        time.sleep(15)
+        SHUTDOWN_SIGNAL.wait(15)
+
+
+def _run_watcher(watcher_fn, name: str):
+    try:
+        watcher_fn()
+    except Exception:
+        log.exception("Watcher %s crashed", name)
 
 
 async def cleanup_webhook(bot: Bot):
@@ -153,42 +156,44 @@ async def cleanup_webhook(bot: Bot):
     for attempt in range(5):
         try:
             await bot.delete_webhook()
-            log.info(f"Webhook removed (attempt {attempt + 1})")
             return
         except Exception as e:
-            log.warning(f"delete_webhook error: {e}")
+            log.warning("delete_webhook error: %s", e)
             await asyncio.sleep(3)
 
 
+def _handle_signal():
+    log.info("Shutdown signal received, stopping...")
+    SHUTDOWN_SIGNAL.set()
+
+
 async def main():
-    # Build aiogram Bot
     bot = Bot(token=settings.api.telegram_token, default=DefaultBotProperties(parse_mode="Markdown"))
     init_bot(bot)
 
-    # Patch ui.handlers.bot reference (set by import, but needs actual Bot instance)
     import ui.handlers as handlers_mod
     handlers_mod.bot = bot
 
-    # Start background threads
-    threading.Thread(target=alert_watcher, daemon=True).start()
-    threading.Thread(target=suricata_watcher, daemon=True).start()
-    threading.Thread(target=_scheduler, daemon=True).start()
-    threading.Thread(target=_uptime_tracker, daemon=True).start()
+    threads = [
+        threading.Thread(target=_run_watcher, args=(alert_watcher, "alert_watcher"), daemon=True),
+        threading.Thread(target=_run_watcher, args=(suricata_watcher, "suricata_watcher"), daemon=True),
+        threading.Thread(target=_scheduler, daemon=True),
+        threading.Thread(target=_uptime_tracker, daemon=True),
+    ]
+    for t in threads:
+        t.start()
 
     try:
         start_metrics_server(settings.api.metrics_port)
-        log.info("Metrics server on port %d", settings.api.metrics_port)
     except Exception as e:
         log.warning("Metrics server failed: %s", e)
 
-    # Start web dashboard (Flask in background thread)
-    try:
-        if os.getenv("WEB_DASHBOARD_ENABLED", "").lower() in ("1", "true", "yes"):
+    if os.getenv("WEB_DASHBOARD_ENABLED", "").lower() in ("1", "true", "yes"):
+        try:
             t = threading.Thread(target=start_dashboard, daemon=True)
             t.start()
-            log.info("Web dashboard started")
-    except Exception as e:
-        log.warning("Web dashboard failed: %s", e)
+        except Exception as e:
+            log.warning("Web dashboard failed: %s", e)
 
     acquire_pid_guard()
     atexit.register(cleanup_pid)
@@ -199,7 +204,13 @@ async def main():
     from runtime import create_dispatcher
     dp = create_dispatcher(bot)
 
-    # Webhook or polling mode
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _handle_signal)
+        except NotImplementedError:
+            pass
+
     if settings.api.webhook_url:
         await cleanup_webhook(bot)
         await bot.set_webhook(

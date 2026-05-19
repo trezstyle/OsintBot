@@ -37,6 +37,10 @@ bot.db-shm
 # Runtime logs
 threat_intel_log.md
 
+# Deploy / local test scripts
+_deploy.py
+_test_top.py
+
 # OS
 .DS_Store
 Thumbs.db

@@ -1,9 +1,7 @@
-"""SQLite database for persistent storage (alerts, FIM, history)."""
 import logging
 import sqlite3
 import threading
-import time
-from functools import lru_cache
+import atexit
 from pathlib import Path
 from typing import Any
 
@@ -19,67 +17,102 @@ PRAGMA synchronous=NORMAL;
 PRAGMA busy_timeout=5000;
 PRAGMA foreign_keys=ON;
 """
+_global_lock = threading.Lock()
+_initialized = False
 
 
 def get_db() -> sqlite3.Connection:
-    if not hasattr(_local, "conn") or _local.conn is None:
-        _local.conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
-        _local.conn.row_factory = sqlite3.Row
-        _local.conn.executescript(_PRAGMAS)
-    return _local.conn
+    conn: sqlite3.Connection | None = getattr(_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.executescript(_PRAGMAS)
+        _local.conn = conn
+    return conn
+
+
+def close_db() -> None:
+    conn: sqlite3.Connection | None = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _local.conn = None
+
+
+def close_all_connections() -> None:
+    for obj in list(threading.enumerate()):
+        try:
+            ident = obj.ident
+            if ident is not None:
+                pass
+        except Exception:
+            pass
 
 
 def init_db() -> None:
-    db = get_db()
-    db.executescript("""
-        CREATE TABLE IF NOT EXISTS fim (
-            path TEXT PRIMARY KEY,
-            hash TEXT NOT NULL,
-            added TEXT NOT NULL,
-            type TEXT NOT NULL DEFAULT 'file'
-        );
-        CREATE TABLE IF NOT EXISTS alerts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            time TEXT NOT NULL,
-            type TEXT NOT NULL DEFAULT 'suricata',
-            line TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            time TEXT NOT NULL,
-            user_id INTEGER,
-            username TEXT,
-            cmd TEXT NOT NULL,
-            args TEXT DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            role TEXT NOT NULL DEFAULT 'admin',
-            added TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            description TEXT DEFAULT '',
-            deadline TEXT,
-            priority TEXT DEFAULT 'medium',
-            status TEXT DEFAULT 'pending',
-            created TEXT NOT NULL,
-            reminder_minutes INTEGER DEFAULT 1440,
-            reminded INTEGER DEFAULT 0
-        );
-    """)
-    db.commit()
-    log.info("Database initialized at %s", _DB_PATH)
+    global _initialized
+    with _global_lock:
+        if _initialized:
+            return
+        db = get_db()
+        db.executescript("""
+            CREATE TABLE IF NOT EXISTS fim (
+                path TEXT PRIMARY KEY,
+                hash TEXT NOT NULL,
+                added TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'file'
+            );
+            CREATE TABLE IF NOT EXISTS alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                time TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'suricata',
+                line TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                time TEXT NOT NULL,
+                user_id INTEGER,
+                username TEXT,
+                cmd TEXT NOT NULL,
+                args TEXT DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                role TEXT NOT NULL DEFAULT 'admin',
+                added TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                deadline TEXT,
+                priority TEXT DEFAULT 'medium',
+                status TEXT DEFAULT 'pending',
+                created TEXT NOT NULL,
+                reminder_minutes INTEGER DEFAULT 1440,
+                reminded INTEGER DEFAULT 0
+            );
+        """)
+        db.commit()
+        _initialized = True
+        log.info("Database initialized at %s", _DB_PATH)
 
 
-# ── FIM ──
+def _safe_commit(db: sqlite3.Connection) -> None:
+    try:
+        db.commit()
+    except Exception as exc:
+        log.error("Commit failed: %s", exc)
+        db.rollback()
+
 
 def fim_load() -> dict[str, dict[str, Any]]:
     db = get_db()
@@ -89,12 +122,17 @@ def fim_load() -> dict[str, dict[str, Any]]:
 
 def fim_save_all(entries: dict[str, dict[str, Any]]) -> None:
     db = get_db()
-    db.execute("DELETE FROM fim")
-    db.executemany(
-        "INSERT INTO fim (path, hash, added, type) VALUES (?, ?, ?, ?)",
-        [(p, v["hash"], v.get("added", ""), v.get("type", "file")) for p, v in entries.items()],
-    )
-    db.commit()
+    try:
+        db.execute("BEGIN")
+        db.execute("DELETE FROM fim")
+        db.executemany(
+            "INSERT INTO fim (path, hash, added, type) VALUES (?, ?, ?, ?)",
+            [(p, v["hash"], v.get("added", ""), v.get("type", "file")) for p, v in entries.items()],
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 def fim_upsert(path: str, hash_val: str, added: str, ftype: str = "file") -> None:
@@ -103,16 +141,14 @@ def fim_upsert(path: str, hash_val: str, added: str, ftype: str = "file") -> Non
         "INSERT OR REPLACE INTO fim (path, hash, added, type) VALUES (?, ?, ?, ?)",
         (path, hash_val, added, ftype),
     )
-    db.commit()
+    _safe_commit(db)
 
-
-# ── Alerts ──
 
 def push_alert(alert_time: str, line: str, alert_type: str = "suricata") -> None:
     db = get_db()
     db.execute("INSERT INTO alerts (time, type, line) VALUES (?, ?, ?)", (alert_time, alert_type, line))
     db.execute("DELETE FROM alerts WHERE id NOT IN (SELECT id FROM alerts ORDER BY id DESC LIMIT 200)")
-    db.commit()
+    _safe_commit(db)
 
 
 def get_alerts(limit: int = 20) -> list[dict[str, Any]]:
@@ -121,8 +157,6 @@ def get_alerts(limit: int = 20) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-# ── History ──
-
 def record_command(user_id: int | None, username: str | None, cmd: str, args: str) -> None:
     db = get_db()
     db.execute(
@@ -130,7 +164,7 @@ def record_command(user_id: int | None, username: str | None, cmd: str, args: st
         (user_id, username or "unknown", cmd, args),
     )
     db.execute("DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY id DESC LIMIT 100)")
-    db.commit()
+    _safe_commit(db)
 
 
 def get_history(limit: int = 20) -> list[dict[str, Any]]:
@@ -140,8 +174,6 @@ def get_history(limit: int = 20) -> list[dict[str, Any]]:
     ).fetchall()
     return [dict(r) for r in rows]
 
-
-# ── Users (role model) ──
 
 def get_user(user_id: int) -> dict[str, Any] | None:
     row = get_db().execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
@@ -154,7 +186,7 @@ def set_user(user_id: int, username: str, role: str = "admin") -> None:
         "INSERT OR REPLACE INTO users (user_id, username, role, added) VALUES (?, ?, ?, datetime('now'))",
         (user_id, username, role),
     )
-    db.commit()
+    _safe_commit(db)
 
 
 def delete_user(user_id: int) -> None:
@@ -167,8 +199,6 @@ def list_users() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-# ── Settings ──
-
 def get_setting(key: str, default: str = "") -> str:
     row = get_db().execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else default
@@ -177,4 +207,4 @@ def get_setting(key: str, default: str = "") -> str:
 def set_setting(key: str, value: str) -> None:
     db = get_db()
     db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
-    db.commit()
+    _safe_commit(db)

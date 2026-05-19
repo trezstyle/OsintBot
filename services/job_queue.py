@@ -32,21 +32,23 @@ class Job:
 
 _jobs: dict[str, Job] = {}
 _jobs_lock = threading.Lock()
+_jobs_cond = threading.Condition(_jobs_lock)
 _worker_thread: Optional[threading.Thread] = None
 
 
 def _worker():
     while True:
         job = None
-        with _jobs_lock:
-            for j in _jobs.values():
-                if j.status == JobStatus.QUEUED:
-                    j.status = JobStatus.RUNNING
-                    job = j
+        with _jobs_cond:
+            while True:
+                for j in _jobs.values():
+                    if j.status == JobStatus.QUEUED:
+                        j.status = JobStatus.RUNNING
+                        job = j
+                        break
+                if job is not None:
                     break
-        if job is None:
-            time.sleep(0.5)
-            continue
+                _jobs_cond.wait()
         try:
             log.info("Running job %s: %s", job.id, job.description)
             result = job.fn()
@@ -74,8 +76,9 @@ def submit(chat_id: int, description: str, fn: Callable[[], Any]) -> str:
     global _worker_thread
     job_id = uuid.uuid4().hex[:12]
     job = Job(id=job_id, chat_id=chat_id, description=description, fn=fn)
-    with _jobs_lock:
+    with _jobs_cond:
         _jobs[job_id] = job
+        _jobs_cond.notify()
     if _worker_thread is None or not _worker_thread.is_alive():
         _worker_thread = threading.Thread(target=_worker, daemon=True)
         _worker_thread.start()

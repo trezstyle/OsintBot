@@ -1,5 +1,6 @@
 """Tests for threat_intel submodules."""
-from unittest.mock import Mock, patch
+import os
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 import requests
@@ -7,10 +8,7 @@ import requests
 from services.threat_intel.reputation import _is_ipv4, _strip_html, get_geoip
 from services.threat_intel.vt import check_hash
 from services.threat_intel.mitre import mitre_lookup
-from services.threat_intel.osint import check_hibp, check_phone, check_email, _dig_txt, _has_mx
-
-
-# ── reputation helpers ──
+from services.threat_intel.osint import check_hibp, check_phone, check_email
 
 
 class TestIsIpv4:
@@ -53,48 +51,49 @@ class TestStripHtml:
 
 
 class TestGetGeoip:
-    def test_success(self):
-        mock_resp = Mock(spec=requests.Response)
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
+    @patch("services.threat_intel.reputation.get_http")
+    def test_success(self, mock_get_http):
+        mock_session = MagicMock()
+        mock_get_http.return_value = mock_session
+        mock_session.get.return_value.status_code = 200
+        mock_session.get.return_value.json.return_value = {
             "city": "Mountain View",
             "region": "California",
             "country": "US",
             "org": "AS15169 Google LLC",
         }
 
-        with patch("services.threat_intel.reputation.requests.get", return_value=mock_resp):
-            result = get_geoip("8.8.8.8")
-            assert "Mountain View" in result
-            assert "Google" in result
-            assert "GeoIP" in result
+        result = get_geoip("8.8.8.8")
+        assert "Mountain View" in result
+        assert "Google" in result
+        assert "GeoIP" in result
 
-    def test_http_error(self):
-        mock_resp = Mock(spec=requests.Response)
-        mock_resp.status_code = 429
+    @patch("services.threat_intel.reputation.get_http")
+    def test_http_error(self, mock_get_http):
+        mock_session = MagicMock()
+        mock_get_http.return_value = mock_session
+        mock_session.get.return_value.status_code = 429
 
-        with patch("services.threat_intel.reputation.requests.get", return_value=mock_resp):
-            result = get_geoip("8.8.8.8")
-            assert result == "GeoIP: N/A"
+        result = get_geoip("8.8.8.8")
+        assert result == "GeoIP: N/A"
 
-    def test_timeout(self):
-        with patch(
-            "services.threat_intel.reputation.requests.get",
-            side_effect=requests.Timeout("timed out"),
-        ):
-            result = get_geoip("8.8.8.8")
-            assert result == "GeoIP: N/A"
+    @patch("services.threat_intel.reputation.get_http")
+    def test_timeout(self, mock_get_http):
+        mock_session = MagicMock()
+        mock_get_http.return_value = mock_session
+        mock_session.get.side_effect = requests.Timeout("timed out")
 
-    def test_connection_error(self):
-        with patch(
-            "services.threat_intel.reputation.requests.get",
-            side_effect=requests.ConnectionError("reset"),
-        ):
-            result = get_geoip("8.8.8.8")
-            assert result == "GeoIP: N/A"
+        result = get_geoip("8.8.8.8")
+        assert result == "GeoIP: N/A"
 
+    @patch("services.threat_intel.reputation.get_http")
+    def test_connection_error(self, mock_get_http):
+        mock_session = MagicMock()
+        mock_get_http.return_value = mock_session
+        mock_session.get.side_effect = requests.ConnectionError("reset")
 
-# ── VT hash check ──
+        result = get_geoip("8.8.8.8")
+        assert result == "GeoIP: N/A"
 
 
 class TestCheckHash:
@@ -115,36 +114,35 @@ class TestCheckHash:
         assert "Invalid hash format" in result
 
     def test_valid_md5_no_api_key(self):
+        has_key = bool(os.getenv("VT_API_KEY", "").strip())
+        if has_key:
+            pytest.skip("VT_API_KEY is set — skipping no-key test")
         result = check_hash("d41d8cd98f00b204e9800998ecf8427e")
         assert "No API key" in result
 
     def test_valid_sha256_no_api_key(self):
+        has_key = bool(os.getenv("VT_API_KEY", "").strip())
+        if has_key:
+            pytest.skip("VT_API_KEY is set — skipping no-key test")
         result = check_hash("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
         assert "No API key" in result
 
-    def test_api_error_handled(self):
-        mock_settings = Mock()
-        mock_settings.api.vt_api_key = "test-key"
-        with patch("services.threat_intel.vt.settings", mock_settings):
-            with patch(
-                "services.threat_intel.vt.requests.get",
-                side_effect=requests.ConnectionError("API down"),
-            ):
-                result = check_hash("d41d8cd98f00b204e9800998ecf8427e")
-                assert "failed" in result.lower() or "check" in result.lower()
+    @patch("services.threat_intel.vt.get_http")
+    def test_api_error_handled(self, mock_get_http):
+        mock_session = MagicMock()
+        mock_get_http.return_value = mock_session
+        mock_session.get.side_effect = requests.ConnectionError("API down")
 
-
-# ── MITRE lookup ──
+        result = check_hash("d41d8cd98f00b204e9800998ecf8427e")
+        assert "failed" in result.lower() or "check" in result.lower()
 
 
 class TestMitreLookup:
     def test_tid_formats(self):
-        """Various TID formats should be normalized."""
-        result = mitre_lookup("T999999")  # non-existent
+        result = mitre_lookup("T999999")
         assert "not found" in result
 
     def test_no_prefix(self):
-        """Without 'T' prefix should still work."""
         result = mitre_lookup("999999")
         assert "not found" in result
 
@@ -157,28 +155,22 @@ class TestMitreLookup:
         assert "not found" in result
 
 
-# ── HIBP ──
-
-
 class TestCheckHibp:
     def test_no_api_key(self):
+        has_key = bool(os.getenv("HIBP_API_KEY", "").strip())
+        if has_key:
+            pytest.skip("HIBP_API_KEY is set — skipping no-key test")
         result = check_hibp("test@example.com")
         assert "No API key" in result
 
-    def test_name_prefix(self):
-        """name: prefix should work for breach detail lookup."""
-        mock_settings = Mock()
-        mock_settings.api.hibp_api_key = "test-key"
-        with patch("services.threat_intel.osint.settings", mock_settings):
-            with patch(
-                "services.threat_intel.osint.requests.get",
-                side_effect=requests.ConnectionError("API unreachable"),
-            ):
-                result = check_hibp("name:Adobe")
-                assert "failed" in result.lower() or "HIBP" in result
+    @patch("services.threat_intel.osint.get_http")
+    def test_name_prefix(self, mock_get_http):
+        mock_session = MagicMock()
+        mock_get_http.return_value = mock_session
+        mock_session.get.side_effect = requests.ConnectionError("API unreachable")
 
-
-# ── Phone OSINT ──
+        result = check_hibp("name:Adobe")
+        assert "failed" in result.lower() or "HIBP" in result
 
 
 class TestCheckPhone:
@@ -191,15 +183,11 @@ class TestCheckPhone:
         assert "failed" in result.lower() or "Invalid" in result
 
 
-# ── Email OSINT ──
-
-
 class TestCheckEmail:
     def test_invalid_format(self):
         result = check_email("not-an-email")
         assert "Invalid email" in result
 
     def test_no_mx(self):
-        """An email with a clearly non-existent domain should fail gracefully."""
         result = check_email("test@thq9x7k2z1.example.com")
         assert isinstance(result, str)

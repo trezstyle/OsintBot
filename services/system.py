@@ -1,4 +1,3 @@
-"""System status, audit, log-analysis, and CVE helpers."""
 import os
 from pathlib import Path
 import re
@@ -9,18 +8,19 @@ import logging
 from collections import defaultdict
 from datetime import timedelta
 
-from services.rate_limit import RateLimiter
-
 import psutil
 import requests
 
 from config import settings
+from services.rate_limit import RateLimiter
 
 log = logging.getLogger("cyber_volt")
 
-# ── TTL cache ──
-
 _TTL_CACHE: dict[str, tuple[float, object]] = {}
+
+_AUTH_LOG_CACHE: tuple[float, list[str]] | None = None
+_AUTH_LOG_CACHE_TTL = 2.0
+
 
 def _cached(key: str, ttl: float, fn):
     now = time.monotonic()
@@ -32,25 +32,53 @@ def _cached(key: str, ttl: float, fn):
     return val
 
 
-def auth_log_lines():
+def _tail_file(path: str, n: int) -> list[str]:
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            if size == 0:
+                return []
+            chunk_size = min(size, 4096 * n)
+            f.seek(-chunk_size, 2)
+            data = f.read(chunk_size).decode(errors="ignore")
+            lines = data.splitlines()
+            if len(lines) > n:
+                lines = lines[-n:]
+            return lines
+    except OSError as exc:
+        log.debug("Cannot tail %s: %s", path, exc)
+        return []
+
+
+def auth_log_lines() -> list[str]:
+    global _AUTH_LOG_CACHE
+    now = time.monotonic()
+    if _AUTH_LOG_CACHE and now - _AUTH_LOG_CACHE[0] < _AUTH_LOG_CACHE_TTL:
+        return _AUTH_LOG_CACHE[1]
     try:
         with open(settings.paths.auth_log_file, "r", errors="ignore") as f:
-            return f.read().splitlines()
+            lines = f.read().splitlines()
+        _AUTH_LOG_CACHE = (now, lines)
+        return lines
     except OSError:
         return []
 
 
 def tail_auth_matches(pattern, limit):
-    matches = [line for line in auth_log_lines() if pattern in line]
+    lines = _tail_file(str(settings.paths.auth_log_file), limit * 10)
+    matches = [line for line in lines if pattern in line]
     return "\n".join(matches[-limit:])
 
 
 def failed_login_count():
-    return sum(1 for line in auth_log_lines() if "Failed password" in line)
+    lines = _tail_file(str(settings.paths.auth_log_file), 5000)
+    return sum(1 for line in lines if "Failed password" in line)
 
 
 def recent_failed_logins(limit):
     return tail_auth_matches("Failed password", limit)
+
 
 def _parse_processes(raw_lines, limit=12):
     parsed = []
@@ -97,11 +125,6 @@ SORT_FIELDS = {
 
 
 def format_top(sort_by="cpu"):
-    """Format top processes with sort support and mobile-friendly layout.
-
-    Args:
-        sort_by: One of "cpu", "ram", "pid", "name"
-    """
     try:
         result = subprocess.run(
             ["ps", "-eo", "pid,pcpu,pmem,rss,args", "--sort=-pcpu", "--no-headers"],
@@ -149,27 +172,26 @@ def format_top(sort_by="cpu"):
 
         return header + "\n".join(rows) + "\n\n" + sort_line
     except Exception as e:
-        log.error(f"format_top error: {e}")
+        log.error("format_top error: %s", e)
         return f"Top failed: {e}"
+
+
 def format_status():
     return _cached("format_status", 2.0, _format_status_impl)
+
 
 def _format_status_impl():
     try:
         cpu = psutil.cpu_percent(interval=0.5)
         mem = psutil.virtual_memory()
         usage = shutil.disk_usage(settings.paths.root_path)
-        disk_pct = (usage.used / usage.total) * 100
+        disk_pct = (usage.used / usage.total) * 100 if usage.total else 0
         load = os.getloadavg()
         net = psutil.net_io_counters()
         uptime_sec = time.time() - psutil.boot_time()
         uptime_str = str(timedelta(seconds=int(uptime_sec))).split(".")[0]
         procs = len(psutil.pids())
         swap = psutil.swap_memory()
-
-        def bar(v, n=10):
-            filled = int(v / 10)
-            return "█" * filled + "░" * (n - filled)
 
         cpu_e = "🟢" if cpu < 50 else "🟡" if cpu < 80 else "🔴"
         mem_e = "🟢" if mem.percent < 50 else "🟡" if mem.percent < 80 else "🔴"
@@ -183,10 +205,10 @@ def _format_status_impl():
             f"║  ⏱ Uptime:  {uptime_str:<28s}║",
             f"║  ⚙ Processes: {procs:<4d}    CPU cores: {psutil.cpu_count():<2d}              ║",
             "╠══════════════════════════════════════╣",
-            f"║  {cpu_e} CPU:  {bar(cpu)}  {cpu:>5.1f}%            ║",
-            f"║  {mem_e} RAM:  {bar(mem.percent)}  {mem.percent:>5.1f}%           ║",
+            f"║  {cpu_e} CPU:  {_bar(cpu)}  {cpu:>5.1f}%            ║",
+            f"║  {mem_e} RAM:  {_bar(mem.percent)}  {mem.percent:>5.1f}%           ║",
             f"║         Used: {mem.used//1024//1024}MB / Total: {mem.total//1024//1024}MB     ║",
-            f"║  {disk_e} DISK: {bar(disk_pct)}  {disk_pct:>5.1f}%           ║",
+            f"║  {disk_e} DISK: {_bar(disk_pct)}  {disk_pct:>5.1f}%           ║",
             f"║         Used: {usage.used//1024//1024}MB / Total: {usage.total//1024//1024}MB  ║",
             "╠══════════════════════════════════════╣",
             f"║  📈 Load:   {load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}            ║",
@@ -198,6 +220,8 @@ def _format_status_impl():
         return "\n".join(lines)
     except Exception as e:
         return f"Status failed: {e}"
+
+
 def analyze_logs(filter_type):
     path = str(settings.paths.auth_log_file)
     if not os.path.exists(path):
@@ -212,8 +236,9 @@ def analyze_logs(filter_type):
         if filter_type not in headers:
             return "Usage: /logs [failed|sudo|ssh|attack]"
         header = headers[filter_type]
-        lines = auth_log_lines()
+
         if filter_type == "attack":
+            lines = _tail_file(path, 5000)
             counts = defaultdict(int)
             for line in lines:
                 if "Failed password" not in line:
@@ -224,17 +249,19 @@ def analyze_logs(filter_type):
             out = "\n".join(f"{count:7d} {ip}" for ip, count in sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10])
         else:
             patterns = {"failed": "Failed password", "sudo": "sudo", "ssh": "sshd"}
+            lines = _tail_file(path, 200)
             out = "\n".join([line for line in lines if patterns[filter_type] in line][-15:])
         if not out.strip():
             return f"{header}\nNo entries found."
         return f"{header}\n```\n{out.strip()}\n```"
     except Exception as e:
         return f"Log analysis failed: {e}"
+
+
 _nvd_limiter = RateLimiter(max_calls=5, window_seconds=60)
 
 
 def check_cve(pkg):
-    """Check CVEs for a package. Package name is validated before shell access."""
     from security import validate_package_name
 
     safe_pkg = validate_package_name(pkg)
@@ -253,10 +280,9 @@ def check_cve(pkg):
         except Exception:
             pass
 
-        # NVD API call with rate limiting (free tier: ~5 req/min)
         import urllib.parse
         if not _nvd_limiter.is_allowed(0):
-            return f"⚠ Rate limited: NVD API allows ~5 requests/min. Wait and retry."
+            return "⚠ Rate limited: NVD API allows ~5 requests/min. Wait and retry."
         safe_query = urllib.parse.quote(safe_pkg)
         r = requests.get(
             f"https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch={safe_query}&resultsPerPage=5",
@@ -284,13 +310,13 @@ def format_speed(bytes_per_sec):
         if bytes_per_sec >= 1024 * 1024:
             return f"{bytes_per_sec / 1024 / 1024:.2f} MB/s"
         return f"{bytes_per_sec / 1024:.1f} KB/s"
-    except Exception as e:
-        log.error(f"format_speed error: {e}")
+    except Exception:
         return "N/A"
 
 
 def format_bandwidth():
     return _cached("format_bandwidth", 5.0, _format_bandwidth_impl)
+
 
 def _format_bandwidth_impl():
     try:
@@ -323,7 +349,7 @@ def _format_bandwidth_impl():
             lines.append("No active interfaces found.")
         return "\n".join(lines)
     except Exception as e:
-        log.error(f"format_bandwidth error: {e}")
+        log.error("format_bandwidth error: %s", e)
         return f"Bandwidth check failed: {e}"
 
 
@@ -333,6 +359,9 @@ def _run_cmd(args, timeout=5):
 
 def _ufw_installed() -> bool:
     return bool(shutil.which("ufw")) or any(Path(p).exists() for p in ("/usr/sbin/ufw", "/sbin/ufw"))
+
+
+_VALID_UFW_ACTIONS = frozenset({"allow", "deny", "delete"})
 
 
 def format_firewall(action: str = None, args: str = None) -> str:
@@ -352,7 +381,7 @@ def format_firewall(action: str = None, args: str = None) -> str:
                 return "Usage: `/fw confirm allow 22/tcp` or `/fw confirm deny 1.2.3.4`"
             real_action = parts[0].lower()
             real_arg = parts[1].strip() if len(parts) > 1 else ""
-            if real_action not in ("allow", "deny", "delete") or not real_arg:
+            if real_action not in _VALID_UFW_ACTIONS or not real_arg:
                 return "Usage: `/fw confirm [allow|deny|delete] <port|ip|rule>`"
 
             active_status = _run_cmd(["ufw", "status"], timeout=5)
@@ -367,7 +396,7 @@ def format_firewall(action: str = None, args: str = None) -> str:
                 f"```\n{output}\n```"
             )
 
-        if action in ("allow", "deny", "delete"):
+        if action in _VALID_UFW_ACTIONS:
             if not args:
                 return f"Usage: `/fw {action} <port|ip|rule>`"
             return (
@@ -378,7 +407,7 @@ def format_firewall(action: str = None, args: str = None) -> str:
 
         return "Usage: `/fw [status|allow|deny|delete|confirm] [args]`"
     except Exception as e:
-        log.error(f"format_firewall({action}, {args}) error: {e}")
+        log.error("format_firewall(%s, %s) error: %s", action, args, e)
         return f"Firewall manager failed: {e}"
 
 
@@ -477,15 +506,14 @@ def format_compliance() -> str:
             checks.append(_compliance_status(False, "Open ports", str(e), warn=True))
 
         try:
-            auth_text = "\n".join(auth_log_lines()[-500:])
-            failed = len([line for line in auth_text.splitlines() if "Failed password" in line])
-            checks.append(_compliance_status(failed == 0, "Failed logins", f"{failed} in last 24h", warn=failed > 0))
+            lines = _tail_file(str(settings.paths.auth_log_file), 500)
+            failed = sum(1 for line in lines if "Failed password" in line)
+            checks.append(_compliance_status(failed == 0, "Failed logins", f"{failed} in recent log entries", warn=failed > 0))
         except Exception as e:
             checks.append(_compliance_status(False, "Failed logins", str(e), warn=True))
 
         try:
             import resource
-
             limits = _read_file("/etc/security/limits.conf")
             core_soft, _ = resource.getrlimit(resource.RLIMIT_CORE)
             core_limit = "unlimited" if core_soft == resource.RLIM_INFINITY else str(core_soft)
@@ -562,5 +590,5 @@ def format_compliance() -> str:
         lines.extend(f"{emoji[status]} {name}: `{status}` - {detail}" for status, name, detail in checks)
         return "\n".join(lines)
     except Exception as e:
-        log.error(f"format_compliance error: {e}")
+        log.error("format_compliance error: %s", e)
         return f"Compliance check failed: {e}"

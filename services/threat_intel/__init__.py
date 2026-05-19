@@ -5,29 +5,27 @@ import requests
 
 log = logging.getLogger(__name__)
 
-# Shared HTTP session with connection pooling
 _http = requests.Session()
 _http.headers.update({"User-Agent": "CyberVoltSOCBot/3.0"})
 _http.max_redirects = 5
 
-# Optional caching for external API calls (configured once at import time)
 try:
-    import requests_cache  # type: ignore
+    import requests_cache
     requests_cache.install_cache(
         "api_cache", backend="sqlite", expire_after=300,
         allowable_methods=("GET", "HEAD"),
-        session_factory=lambda: _http,
     )
+    log.info("API caching enabled via requests_cache")
 except ImportError:
     log.debug("requests_cache not installed; API caching disabled")
+except Exception as exc:
+    log.warning("requests_cache init failed: %s; proceeding without caching", exc)
 
 
 def get_http() -> requests.Session:
-    """Return the shared HTTP session. Use from submodules instead of raw requests.get()."""
     return _http
 
-# Re-export all public functions for backward compatibility.
-# Each sub-module is focused on a specific category of checks.
+
 from services.threat_intel.vt import check_hash, check_urlscan, get_vt_report
 from services.threat_intel.reputation import (
     check_blacklist,

@@ -12,5 +12,7 @@ storage = MemoryStorage()
 def create_dispatcher(bot: Bot) -> Dispatcher:
     dp = Dispatcher(storage=storage)
     from ui.handlers import router
+    from ui.task_handlers import router as task_router
     dp.include_router(router)
+    dp.include_router(task_router)
     return dp
