@@ -213,3 +213,12 @@ def task_priority_keyboard(prefix: str = "task_setprio") -> InlineKeyboardMarkup
         [InlineKeyboardButton(text=v, callback_data=f"{prefix}_{k}") for k, v in list(labels.items())[:2]],
         [InlineKeyboardButton(text=v, callback_data=f"{prefix}_{k}") for k, v in list(labels.items())[2:]],
     ])
+
+
+def day_view_keyboard(year: int, month: int, day: int) -> InlineKeyboardMarkup:
+    date_str = f"{year:04d}-{month:02d}-{day:02d}"
+    rows = [
+        [InlineKeyboardButton(text="➕ Add task for this day", callback_data=f"task_add_date_{date_str}")],
+        [InlineKeyboardButton(text="📅 Calendar", callback_data="task_calendar")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)

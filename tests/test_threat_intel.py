@@ -133,8 +133,11 @@ class TestCheckHash:
         mock_get_http.return_value = mock_session
         mock_session.get.side_effect = requests.ConnectionError("API down")
 
-        result = check_hash("d41d8cd98f00b204e9800998ecf8427e")
-        assert "failed" in result.lower() or "check" in result.lower()
+        mock_settings = Mock()
+        mock_settings.api.vt_api_key = "test-key"
+        with patch("services.threat_intel.vt.settings", mock_settings):
+            result = check_hash("d41d8cd98f00b204e9800998ecf8427e")
+            assert "ConnectionError" in result or "failed" in result.lower()
 
 
 class TestMitreLookup:

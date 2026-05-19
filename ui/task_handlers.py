@@ -32,6 +32,7 @@ from services.tasks import (
 from ui.handlers import authorized_callback, authorized_message, bot, send_long_message
 from ui.keyboards import (
     calendar_keyboard,
+    day_view_keyboard,
     task_confirm_delete_keyboard,
     task_list_keyboard,
     task_view_keyboard,
@@ -106,7 +107,15 @@ async def cmd_task(message: Message, command: CommandObject):
     if sub == "add":
         rest = " ".join(args[1:])
         if not rest:
-            await message.answer("Usage:\n`/task add <title>`\nYou can also add: `| deadline: YYYY-MM-DD HH:MM | priority: low|medium|high|critical | desc: ...`", parse_mode="Markdown")
+            text = (
+                "➕ *Create a new task*\n\n"
+                "Send me the title inline:\n"
+                "`/task add Buy groceries`\n\n"
+                "Or with options:\n"
+                "`/task add <title> | deadline: YYYY-MM-DD HH:MM | priority: low|medium|high|critical | desc: ...`\n\n"
+                "💡 *Tip:* Use `/task` to pick a date from the calendar!"
+            )
+            await message.answer(text, parse_mode="Markdown")
             return
         try:
             tid = _parse_and_add(uid, rest)
@@ -259,8 +268,10 @@ async def fsm_task_title(message: Message, state: FSMContext):
         await message.answer("❌ Title too long (max 200 chars).")
         return
     uid = _uid(message)
+    data = await state.get_data()
+    deadline = data.get("add_date")
     try:
-        tid = add_task(uid, title)
+        tid = add_task(uid, title, deadline=deadline)
         t = get_task(tid)
         text = f"✅ *Task #{tid} created!*\n\n{format_task(t)}"
         await message.answer(
@@ -297,13 +308,16 @@ async def handle_calendar(call: CallbackQuery):
             y, m, d = int(parts[2]), int(parts[3]), int(parts[4])
             date_str = f"{y:04d}-{m:02d}-{d:02d}"
             items, total = tasks_for_date(uid, date_str)
+            day_kb = day_view_keyboard(y, m, d)
             if not items:
-                await call.message.edit_text(f"📅 *{date_str}*\nNo tasks for this day.", parse_mode="Markdown")
+                await call.message.edit_text(
+                    f"📅 *{date_str}*\nNo tasks for this day.\n\n➕ Tap below to add one:",
+                    parse_mode="Markdown",
+                    reply_markup=day_kb,
+                )
             else:
                 text = format_task_list(items, total, header=f"📋 {date_str}")
-                total_pages = max(1, (total + _PAGE_SIZE - 1) // _PAGE_SIZE)
-                kb = task_list_keyboard(items, 0, total_pages)
-                await call.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
+                await call.message.edit_text(text, parse_mode="Markdown", reply_markup=day_kb)
 
         elif cmd == "ignore":
             await call.answer()
@@ -418,6 +432,19 @@ async def handle_task_actions(call: CallbackQuery, state: FSMContext = None):
             parse_mode="Markdown",
         )
         if state is not None:
+            await state.set_state(TaskStates.waiting_for_title)
+        await call.answer()
+        return
+
+    # task_add_date_YYYY_MM_DD — add task for a specific date
+    if action == "add" and parts[2] == "date" and len(parts) >= 4:
+        date_str = f"{parts[3]}-{parts[4]}-{parts[5]}"
+        await call.message.edit_text(
+            f"📅 *Add task for {date_str}*\n\nSend me the task title:",
+            parse_mode="Markdown",
+        )
+        if state is not None:
+            await state.update_data(add_date=date_str)
             await state.set_state(TaskStates.waiting_for_title)
         await call.answer()
         return
