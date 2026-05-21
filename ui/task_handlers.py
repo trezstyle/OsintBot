@@ -132,7 +132,7 @@ async def cmd_task(message: Message, command: CommandObject):
 
     # ── Status change shortcuts ──
     if sub == "done" and len(args) >= 2:
-        _set_task_status(message, uid, args[1], "done")
+        await _set_task_status(message, uid, args[1], "done")
         return
     if sub == "del" and len(args) >= 2:
         await _delete_task_interactive(message, uid, args[1])
@@ -200,20 +200,20 @@ def _parse_and_add(uid: int, text: str) -> int:
     return add_task(uid, title, description, deadline, priority, reminder_minutes)
 
 
-def _set_task_status(message: Message, uid: int, task_id_str: str, status: str):
+async def _set_task_status(message: Message, uid: int, task_id_str: str, status: str):
     try:
         tid = int(task_id_str)
     except ValueError:
-        message.answer("❌ Invalid task ID")
+        await message.answer("❌ Invalid task ID")
         return
     try:
         update_task(tid, user_id=uid, status=status)
-        message.answer(f"✅ Task #{tid} → *{status}*", parse_mode="Markdown")
+        await message.answer(f"✅ Task #{tid} → *{status}*", parse_mode="Markdown")
         notify_scheduler_change()
     except TaskNotFoundError:
-        message.answer(f"❌ Task #{tid} not found")
+        await message.answer(f"❌ Task #{tid} not found")
     except TaskOwnershipError:
-        message.answer("❌ Not your task")
+        await message.answer("❌ Not your task")
 
 
 async def _delete_task_interactive(message: Message, uid: int, task_id_str: str):

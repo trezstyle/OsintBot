@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
 
-from services.notifier import send_message
+from services.notifier import send_message_sync
 
 log = logging.getLogger("cyber_volt.job_queue")
 
@@ -30,6 +30,7 @@ class Job:
     created: float = field(default_factory=time.monotonic)
 
 
+_JOBS_MAX = 100
 _jobs: dict[str, Job] = {}
 _jobs_lock = threading.Lock()
 _jobs_cond = threading.Condition(_jobs_lock)
@@ -55,7 +56,7 @@ def _worker():
             with _jobs_lock:
                 job.status = JobStatus.DONE
                 job.result = str(result) if result else "Done"
-            send_message(
+            send_message_sync(
                 job.chat_id,
                 f"✅ *Job Complete: {job.description}*\n`{job.id}`",
                 parse_mode="Markdown",
@@ -65,7 +66,7 @@ def _worker():
             with _jobs_lock:
                 job.status = JobStatus.FAILED
                 job.result = str(e)
-            send_message(
+            send_message_sync(
                 job.chat_id,
                 f"❌ *Job Failed: {job.description}*\n```\n{e}\n```",
                 parse_mode="Markdown",
@@ -77,6 +78,12 @@ def submit(chat_id: int, description: str, fn: Callable[[], Any]) -> str:
     job_id = uuid.uuid4().hex[:12]
     job = Job(id=job_id, chat_id=chat_id, description=description, fn=fn)
     with _jobs_cond:
+        # Evict completed jobs when over limit
+        if len(_jobs) >= _JOBS_MAX:
+            done_ids = [jid for jid, j in _jobs.items()
+                        if j.status in (JobStatus.DONE, JobStatus.FAILED)]
+            for jid in done_ids[:len(done_ids) - _JOBS_MAX // 2]:
+                del _jobs[jid]
         _jobs[job_id] = job
         _jobs_cond.notify()
     if _worker_thread is None or not _worker_thread.is_alive():

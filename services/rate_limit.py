@@ -1,11 +1,13 @@
 """Simple in-memory rate limiter for Telegram handlers."""
+import asyncio
 import logging
 import threading
 import time
 from collections import defaultdict
 from functools import wraps
 
-from services.notifier import send_message
+from services.i18n import t
+from services.notifier import send_message_sync
 
 log = logging.getLogger("cyber_volt.rate_limit")
 
@@ -100,25 +102,25 @@ def rate_limit(cmd: str = "", heavy: bool = False):
 
     Usage:
         @rate_limit("scan", heavy=True)
-        def cmd_scan(m): ...
+        async def cmd_scan(m): ...
     """
     def decorator(func):
         @wraps(func)
-        def wrapper(obj, *args, **kwargs):
+        async def wrapper(obj, *args, **kwargs):
             uid = _get_user_id(obj)
             if uid is None:
-                return func(obj, *args, **kwargs)
+                return await func(obj, *args, **kwargs)
 
             limiter = _heavy if heavy else _limiter_for(cmd or func.__name__)
             if not limiter.is_allowed(uid):
                 cid = _get_chat_id(obj)
                 if cid:
-                    send_message(
+                    send_message_sync(
                         cid,
-                        "⚠️ *Rate limit reached.* Please wait before using this command again.",
+                        t("rate_limit"),
                         parse_mode="Markdown",
                     )
                 return
-            return func(obj, *args, **kwargs)
+            return await func(obj, *args, **kwargs)
         return wrapper
     return decorator

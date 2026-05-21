@@ -16,6 +16,7 @@ from services.rate_limit import RateLimiter
 
 log = logging.getLogger("cyber_volt")
 
+_TTL_CACHE_MAX = 256
 _TTL_CACHE: dict[str, tuple[float, object]] = {}
 
 _AUTH_LOG_CACHE: tuple[float, list[str]] | None = None
@@ -24,6 +25,15 @@ _AUTH_LOG_CACHE_TTL = 2.0
 
 def _cached(key: str, ttl: float, fn):
     now = time.monotonic()
+    if len(_TTL_CACHE) > _TTL_CACHE_MAX:
+        expired = [k for k, (t, _) in _TTL_CACHE.items() if now - t >= ttl]
+        if expired:
+            for k in expired:
+                del _TTL_CACHE[k]
+        else:
+            oldest = sorted(_TTL_CACHE.items(), key=lambda x: x[1][0])[:len(_TTL_CACHE) // 2]
+            for k, _ in oldest:
+                del _TTL_CACHE[k]
     entry = _TTL_CACHE.get(key)
     if entry and now - entry[0] < ttl:
         return entry[1]

@@ -1,5 +1,7 @@
 """Telegram UI handlers for Cyber-Volt SOC Bot (aiogram 3.x)."""
+import asyncio
 import logging
+import io
 import time
 from datetime import datetime, timedelta
 from functools import wraps
@@ -321,15 +323,15 @@ async def cmd_handler(message: Message, command: CommandObject, state: FSMContex
 
     try:
         if cmd == "status":
-            await send_long_message(message.chat.id, format_status(), parse_mode="Markdown")
+            await send_long_message(message.chat.id, await asyncio.to_thread(format_status), parse_mode="Markdown")
         elif cmd == "top":
             sort = args[0] if args and args[0] in ("cpu", "ram", "pid", "name") else "cpu"
-            await send_long_message(message.chat.id, format_top(sort), parse_mode="Markdown", reply_markup=top_keyboard(sort))
+            await send_long_message(message.chat.id, await asyncio.to_thread(format_top, sort), parse_mode="Markdown", reply_markup=top_keyboard(sort))
         elif cmd == "bandwidth":
-            await send_long_message(message.chat.id, format_bandwidth(), parse_mode="Markdown")
+            await send_long_message(message.chat.id, await asyncio.to_thread(format_bandwidth), parse_mode="Markdown")
         elif cmd == "logs":
             if args:
-                await send_long_message(message.chat.id, analyze_logs(args[0]), parse_mode="Markdown")
+                await send_long_message(message.chat.id, await asyncio.to_thread(analyze_logs, args[0]), parse_mode="Markdown")
             else:
                 await message.answer("📊 *Choose log filter:*", parse_mode="Markdown", reply_markup=logs_keyboard())
         elif cmd == "recon":
@@ -344,28 +346,28 @@ async def cmd_handler(message: Message, command: CommandObject, state: FSMContex
                 target = [a for a in args if a != "fast"][0] if fast else args[0]
                 if fast:
                     await message.answer(f"⚡ *Fast scan `{target}`...*", parse_mode="Markdown")
-                    await send_long_message(message.chat.id, scan_network(target, all_ports=False), parse_mode="Markdown")
+                    await send_long_message(message.chat.id, await asyncio.to_thread(scan_network, target, False), parse_mode="Markdown")
                 else:
                     await message.answer(f"🔍 *Full scan `{target}`...* ~5-10 min ⏳", parse_mode="Markdown")
-                    await send_long_message(message.chat.id, scan_network(target, all_ports=True), parse_mode="Markdown")
+                    await send_long_message(message.chat.id, await asyncio.to_thread(scan_network, target, True), parse_mode="Markdown")
             else:
                 await message.answer("🕸 *Choose scan mode:*", parse_mode="Markdown", reply_markup=scan_keyboard())
         elif cmd == "fim":
             if len(args) >= 2 and args[0] == "add":
-                await send_long_message(message.chat.id, fim_add(" ".join(args[1:])), parse_mode="Markdown")
+                await send_long_message(message.chat.id, await asyncio.to_thread(fim_add, " ".join(args[1:])), parse_mode="Markdown")
             elif args and args[0] == "check":
-                await send_long_message(message.chat.id, fim_check(), parse_mode="Markdown")
+                await send_long_message(message.chat.id, await asyncio.to_thread(fim_check), parse_mode="Markdown")
             else:
                 await message.answer("📋 *File Integrity Monitor*", parse_mode="Markdown", reply_markup=fim_keyboard())
         elif cmd == "cve":
             if args:
-                await send_long_message(message.chat.id, check_cve(args[0]), parse_mode="Markdown")
+                await send_long_message(message.chat.id, await asyncio.to_thread(check_cve, args[0]), parse_mode="Markdown")
             else:
                 await message.answer("🧠 *Enter package name:*\nExample: `openssl`", parse_mode="Markdown")
                 await state.set_state(BotStates.waiting_for_package)
         elif cmd == "hibp":
             if args:
-                await send_long_message(message.chat.id, check_hibp(args[0]), parse_mode="Markdown")
+                await send_long_message(message.chat.id, await asyncio.to_thread(check_hibp, args[0]), parse_mode="Markdown")
             else:
                 await message.answer("🔐 *Enter email or domain:*", parse_mode="Markdown")
                 await state.set_state(BotStates.waiting_for_hibp_input)
@@ -385,21 +387,21 @@ async def cmd_handler(message: Message, command: CommandObject, state: FSMContex
                     reply_markup=kb,
                 )
             else:
-                await send_long_message(message.chat.id, format_firewall(action, fw_args), parse_mode="Markdown")
+                await send_long_message(message.chat.id, await asyncio.to_thread(format_firewall, action, fw_args), parse_mode="Markdown")
         elif cmd == "compliance":
-            await send_long_message(message.chat.id, format_compliance(), parse_mode="Markdown")
+            await send_long_message(message.chat.id, await asyncio.to_thread(format_compliance), parse_mode="Markdown")
         elif cmd == "mitre":
             if args:
-                await send_long_message(message.chat.id, mitre_lookup(args[0]), parse_mode="Markdown")
+                await send_long_message(message.chat.id, await asyncio.to_thread(mitre_lookup, args[0]), parse_mode="Markdown")
             else:
                 await message.answer("🧬 *Enter technique ID:*\nExample: `T1059`", parse_mode="Markdown")
                 await state.set_state(BotStates.waiting_for_mitre_technique)
         elif cmd == "report":
             await message.answer("📄 *Generating PDF report...*")
-            result = generate_report()
-            if isinstance(result, str) and Path(result).exists():
-                with open(result, "rb") as f:
-                    await bot.send_document(message.chat.id, f, caption="📄 Cyber-Volt SOC Report")
+            result = await asyncio.to_thread(generate_report)
+            if isinstance(result, str) and await asyncio.to_thread(Path(result).exists):
+                data = await asyncio.to_thread(lambda: open(result, "rb").read())
+                await bot.send_document(message.chat.id, io.BytesIO(data), caption="📄 Cyber-Volt SOC Report")
             else:
                 await message.answer(f"❌ {result}")
         elif cmd == "alerts":
@@ -463,7 +465,7 @@ async def cmd_handler(message: Message, command: CommandObject, state: FSMContex
                     if not validate_fn(check_arg):
                         await message.answer(f"❌ Invalid input: `{arg}`")
                         return
-                await send_long_message(message.chat.id, config["fn"](arg), parse_mode="Markdown")
+                await send_long_message(message.chat.id, await asyncio.to_thread(config["fn"], arg), parse_mode="Markdown")
             else:
                 await message.answer(config["prompt"], parse_mode="Markdown")
                 await state.update_data(table_cmd=cmd)
@@ -499,13 +501,13 @@ async def auto_threat_hunt(message: Message):
     ip = security.validate_ip(text)
     if ip:
         await message.answer(f"🎯 *IP detected:* `{ip}`\nRunning threat hunt...", parse_mode="Markdown")
-        await send_long_message(message.chat.id, threat_hunt_ip(ip), parse_mode="Markdown")
+        await send_long_message(message.chat.id, await asyncio.to_thread(threat_hunt_ip, ip), parse_mode="Markdown")
         return
 
     domain = security.validate_domain(text)
     if domain:
         await message.answer(f"🌐 *Domain detected:* `{domain}`\nRunning recon...", parse_mode="Markdown")
-        await send_long_message(message.chat.id, threat_hunt_domain(domain), parse_mode="Markdown")
+        await send_long_message(message.chat.id, await asyncio.to_thread(threat_hunt_domain, domain), parse_mode="Markdown")
         return
 
 
@@ -521,7 +523,7 @@ async def handle_fw_confirm(call: CallbackQuery):
         await call.answer("❌ Invalid confirmation data", show_alert=True)
         return
     action, arg = parts[0], parts[1]
-    result = format_firewall("confirm", f"{action} {arg}")
+    result = await asyncio.to_thread(format_firewall, "confirm", f"{action} {arg}")
     try:
         await call.message.edit_text(result, parse_mode="Markdown")
     except Exception:
@@ -558,14 +560,14 @@ async def handle_callback(call: CallbackQuery, state: FSMContext):
             await bot.send_message(cid, "📊 *Choose log filter:*", parse_mode="Markdown", reply_markup=logs_keyboard())
         elif cmd.startswith("logs_"):
             ftype = cmd.replace("logs_", "")
-            await send_long_message(cid, analyze_logs(ftype), parse_mode="Markdown")
+            await send_long_message(cid, await asyncio.to_thread(analyze_logs, ftype), parse_mode="Markdown")
         elif cmd == "fim":
             await bot.send_message(cid, "📋 *File Integrity Monitor*", parse_mode="Markdown", reply_markup=fim_keyboard())
         elif cmd == "fim_add":
             await bot.send_message(cid, "📋 *Enter file path:*\nExample: `/etc/passwd`", parse_mode="Markdown")
             await state.set_state(BotStates.waiting_for_fim_path)
         elif cmd == "fim_check":
-            await send_long_message(cid, fim_check(), parse_mode="Markdown")
+            await send_long_message(cid, await asyncio.to_thread(fim_check), parse_mode="Markdown")
         elif cmd == "cve":
             await bot.send_message(cid, "🧠 *Enter package name:*\nExample: `openssl`", parse_mode="Markdown")
             await state.set_state(BotStates.waiting_for_package)
@@ -580,22 +582,22 @@ async def handle_callback(call: CallbackQuery, state: FSMContext):
             await state.update_data(table_cmd=cmd)
             await state.set_state(BotStates.waiting_for_from_table)
         elif cmd == "status":
-            await send_long_message(cid, format_status(), parse_mode="Markdown")
+            await send_long_message(cid, await asyncio.to_thread(format_status), parse_mode="Markdown")
         elif cmd in ("top", "top_cpu", "top_ram", "top_pid", "top_name"):
             sort = cmd.split("_")[-1] if "_" in cmd else "cpu"
-            await send_long_message(cid, format_top(sort), parse_mode="Markdown", reply_markup=top_keyboard(sort))
+            await send_long_message(cid, await asyncio.to_thread(format_top, sort), parse_mode="Markdown", reply_markup=top_keyboard(sort))
         elif cmd == "bandwidth":
-            await send_long_message(cid, format_bandwidth(), parse_mode="Markdown")
+            await send_long_message(cid, await asyncio.to_thread(format_bandwidth), parse_mode="Markdown")
         elif cmd == "fw":
-            await send_long_message(cid, format_firewall(), parse_mode="Markdown")
+            await send_long_message(cid, await asyncio.to_thread(format_firewall), parse_mode="Markdown")
         elif cmd == "compliance":
-            await send_long_message(cid, format_compliance(), parse_mode="Markdown")
+            await send_long_message(cid, await asyncio.to_thread(format_compliance), parse_mode="Markdown")
         elif cmd == "report":
             await bot.send_message(cid, "📄 *Generating PDF report...*")
-            result = generate_report()
-            if isinstance(result, str) and Path(result).exists():
-                with open(result, "rb") as f:
-                    await bot.send_document(cid, f, caption="📄 Cyber-Volt SOC Report")
+            result = await asyncio.to_thread(generate_report)
+            if isinstance(result, str) and await asyncio.to_thread(Path(result).exists):
+                data = await asyncio.to_thread(lambda: open(result, "rb").read())
+                await bot.send_document(cid, io.BytesIO(data), caption="📄 Cyber-Volt SOC Report")
             else:
                 await bot.send_message(cid, f"❌ {result}")
         elif cmd == "alerts":
@@ -634,7 +636,7 @@ async def fsm_process_ip_hunt(message: Message, state: FSMContext):
         await message.answer(f"❌ Invalid IP address: `{ip}`")
         return
     await message.answer(f"🎯 *Threat Hunting `{validated}`...*", parse_mode="Markdown")
-    await send_long_message(message.chat.id, threat_hunt_ip(validated), parse_mode="Markdown")
+    await send_long_message(message.chat.id, await asyncio.to_thread(threat_hunt_ip, validated), parse_mode="Markdown")
 
 
 @router.message(BotStates.waiting_for_domain)
@@ -649,12 +651,12 @@ async def fsm_process_domain_hunt(message: Message, state: FSMContext):
     ip = security.validate_ip(text)
     if ip:
         await message.answer(f"🎯 *Threat Hunting `{ip}`...*", parse_mode="Markdown")
-        await send_long_message(message.chat.id, threat_hunt_ip(ip), parse_mode="Markdown")
+        await send_long_message(message.chat.id, await asyncio.to_thread(threat_hunt_ip, ip), parse_mode="Markdown")
         return
     domain = security.validate_domain(text)
     if domain:
         await message.answer(f"🌐 *Recon `{domain}`...*", parse_mode="Markdown")
-        await send_long_message(message.chat.id, threat_hunt_domain(domain), parse_mode="Markdown")
+        await send_long_message(message.chat.id, await asyncio.to_thread(threat_hunt_domain, domain), parse_mode="Markdown")
         return
     await message.answer(f"❌ Not a valid IP address or domain: `{text}`")
 
@@ -668,7 +670,7 @@ async def fsm_process_scan_fast(message: Message, state: FSMContext):
         await message.answer("❌ No target entered.")
         return
     await message.answer(f"⚡ *Fast scan `{t}`...*", parse_mode="Markdown")
-    await send_long_message(message.chat.id, scan_network(t, all_ports=False), parse_mode="Markdown")
+    await send_long_message(message.chat.id, await asyncio.to_thread(scan_network, t, False), parse_mode="Markdown")
 
 
 @router.message(BotStates.waiting_for_scan_full)
@@ -680,7 +682,7 @@ async def fsm_process_scan_full(message: Message, state: FSMContext):
         await message.answer("❌ No target entered.")
         return
     await message.answer(f"🔍 *Full scan `{t}`...* ~5-10 min ⏳", parse_mode="Markdown")
-    await send_long_message(message.chat.id, scan_network(t, all_ports=True), parse_mode="Markdown")
+    await send_long_message(message.chat.id, await asyncio.to_thread(scan_network, t, True), parse_mode="Markdown")
 
 
 @router.message(BotStates.waiting_for_fim_path)
@@ -691,7 +693,7 @@ async def fsm_process_fim_add(message: Message, state: FSMContext):
     if not p:
         await message.answer("❌ No path entered.")
         return
-    await send_long_message(message.chat.id, fim_add(p), parse_mode="Markdown")
+    await send_long_message(message.chat.id, await asyncio.to_thread(fim_add, p), parse_mode="Markdown")
 
 
 @router.message(BotStates.waiting_for_package)
@@ -706,7 +708,7 @@ async def fsm_process_cve(message: Message, state: FSMContext):
         await message.answer(f"❌ Invalid package name: `{p}`")
         return
     await message.answer(f"🧠 *Checking CVE for `{p}`...*", parse_mode="Markdown")
-    await send_long_message(message.chat.id, check_cve(p), parse_mode="Markdown")
+    await send_long_message(message.chat.id, await asyncio.to_thread(check_cve, p), parse_mode="Markdown")
 
 
 @router.message(BotStates.waiting_for_hibp_input)
@@ -718,7 +720,7 @@ async def fsm_process_hibp(message: Message, state: FSMContext):
         await message.answer("❌ No email entered.")
         return
     await message.answer(f"🔐 *Checking `{e}`...*\n💡 Tip: use `name:BreachName` for details", parse_mode="Markdown")
-    await send_long_message(message.chat.id, check_hibp(e), parse_mode="Markdown")
+    await send_long_message(message.chat.id, await asyncio.to_thread(check_hibp, e), parse_mode="Markdown")
 
 
 @router.message(BotStates.waiting_for_mitre_technique)
@@ -730,7 +732,7 @@ async def fsm_process_mitre(message: Message, state: FSMContext):
         await message.answer("❌ No technique ID entered.")
         return
     await message.answer(f"🧬 *Looking up `{t}` in MITRE...*", parse_mode="Markdown")
-    await send_long_message(message.chat.id, mitre_lookup(t), parse_mode="Markdown")
+    await send_long_message(message.chat.id, await asyncio.to_thread(mitre_lookup, t), parse_mode="Markdown")
 
 
 @router.message(BotStates.waiting_for_from_table)
@@ -757,7 +759,7 @@ async def fsm_process_from_table(message: Message, state: FSMContext):
     success_msg = config.get("success_msg")
     if success_msg:
         await message.answer(success_msg.format(arg=arg), parse_mode="Markdown")
-    await send_long_message(message.chat.id, config["fn"](arg), parse_mode="Markdown")
+    await send_long_message(message.chat.id, await asyncio.to_thread(config["fn"], arg), parse_mode="Markdown")
 
 
 async def process_domain_hunt_inner(message: Message):
@@ -766,11 +768,11 @@ async def process_domain_hunt_inner(message: Message):
     ip = security.validate_ip(text)
     if ip:
         await message.answer(f"🎯 *Threat Hunting `{ip}`...*", parse_mode="Markdown")
-        await send_long_message(message.chat.id, threat_hunt_ip(ip), parse_mode="Markdown")
+        await send_long_message(message.chat.id, await asyncio.to_thread(threat_hunt_ip, ip), parse_mode="Markdown")
         return
     domain = security.validate_domain(text)
     if domain:
         await message.answer(f"🌐 *Recon `{domain}`...*", parse_mode="Markdown")
-        await send_long_message(message.chat.id, threat_hunt_domain(domain), parse_mode="Markdown")
+        await send_long_message(message.chat.id, await asyncio.to_thread(threat_hunt_domain, domain), parse_mode="Markdown")
         return
     await message.answer(f"❌ Not a valid IP address or domain: `{text}`")

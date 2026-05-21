@@ -10,6 +10,8 @@ from config import settings
 log = logging.getLogger("cyber_volt.db")
 
 _local = threading.local()
+_all_connections: list[sqlite3.Connection] = []
+_all_connections_lock = threading.Lock()
 _DB_PATH: Path = settings.paths.base_dir / "bot.db"
 _PRAGMAS = """
 PRAGMA journal_mode=WAL;
@@ -28,6 +30,8 @@ def get_db() -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         conn.executescript(_PRAGMAS)
         _local.conn = conn
+        with _all_connections_lock:
+            _all_connections.append(conn)
     return conn
 
 
@@ -39,14 +43,20 @@ def close_db() -> None:
         except Exception:
             pass
         _local.conn = None
+        with _all_connections_lock:
+            try:
+                _all_connections.remove(conn)
+            except ValueError:
+                pass
 
 
 def close_all_connections() -> None:
-    for obj in list(threading.enumerate()):
+    with _all_connections_lock:
+        connections = list(_all_connections)
+        _all_connections.clear()
+    for conn in connections:
         try:
-            ident = obj.ident
-            if ident is not None:
-                pass
+            conn.close()
         except Exception:
             pass
 

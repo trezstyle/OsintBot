@@ -8,7 +8,7 @@ import requests
 
 from config import settings
 from services.threat_intel import get_http
-from services.threat_intel.reputation import _strip_html
+from services.threat_intel.utils import strip_html as _strip_html
 
 log = logging.getLogger("cyber_volt")
 

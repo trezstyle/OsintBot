@@ -8,6 +8,7 @@ from aiogram import Bot
 log = logging.getLogger("cyber_volt.notifier")
 
 _bot: Optional[Bot] = None
+_LOOPS_MAX = 50
 _loops: dict[int, asyncio.AbstractEventLoop] = {}
 _loops_lock = threading.Lock()
 
@@ -25,9 +26,14 @@ def _get_loop() -> asyncio.AbstractEventLoop:
 
 def _cleanup_stale_loops() -> None:
     with _loops_lock:
-        dead = [tid for tid, loop in _loops.items() if loop.is_closed()]
+        # Remove closed loops and loops from dead threads
+        alive_tids = {t.ident for t in threading.enumerate() if t.ident is not None}
+        dead = [tid for tid, loop in _loops.items()
+                if loop.is_closed() or tid not in alive_tids]
         for tid in dead:
-            del _loops[tid]
+            loop = _loops.pop(tid)
+            if not loop.is_closed():
+                loop.close()
 
 
 def init_bot(bot_instance: Bot) -> None:

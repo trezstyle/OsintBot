@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 import requests
 
-from services.threat_intel.reputation import _is_ipv4, _strip_html, get_geoip
+from services.threat_intel.reputation import _is_ipv4, get_geoip
+from services.threat_intel.utils import strip_html as _strip_html
 from services.threat_intel.vt import check_hash
 from services.threat_intel.mitre import mitre_lookup
 from services.threat_intel.osint import check_hibp, check_phone, check_email

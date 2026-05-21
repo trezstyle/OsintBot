@@ -1,5 +1,5 @@
 """Background alert watchers."""
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timedelta
 import logging
 import os
@@ -82,7 +82,9 @@ def alert_watcher() -> None:
                 continue
             seen_lines.add(lk)
             if len(seen_lines) > 500:
-                seen_lines.clear()
+                # Evict oldest half to maintain rolling dedup without a full gap
+                evict = sorted(seen_lines)[:250]
+                seen_lines -= set(evict)
 
             m = re.search(r"from (\d+\.\d+\.\d+\.\d+)", line)
             if not m:
@@ -119,7 +121,7 @@ def alert_watcher() -> None:
 
 
 # ── Suricata alert buffer — last N alerts ──
-suricata_alerts: list[dict] = []
+suricata_alerts: deque[dict] = deque(maxlen=50)
 suricata_lock = threading.Lock()
 
 
@@ -164,12 +166,12 @@ def suricata_watcher() -> None:
                 continue
             seen.add(sig)
             if len(seen) > 1000:
-                seen.clear()
+                # Evict oldest half to maintain rolling dedup without a full gap
+                evict = sorted(seen)[:500]
+                seen -= set(evict)
 
             with suricata_lock:
                 suricata_alerts.append({"time": now, "line": sig})
-                if len(suricata_alerts) > 50:
-                    suricata_alerts.pop(0)
             push_alert({"time": now.isoformat(), "line": sig, "type": "suricata"})
             alerts_total.labels(severity="suricata").inc()
 

@@ -11,19 +11,23 @@ _http.max_redirects = 5
 
 try:
     import requests_cache
-    requests_cache.install_cache(
+    _cached_http = requests_cache.CachedSession(
         "api_cache", backend="sqlite", expire_after=300,
         allowable_methods=("GET", "HEAD"),
     )
-    log.info("API caching enabled via requests_cache")
+    _cached_http.headers.update({"User-Agent": "CyberVoltSOCBot/3.0"})
+    _cached_http.max_redirects = 5
+    log.info("API caching enabled via requests_cache (isolated session)")
 except ImportError:
+    _cached_http = _http
     log.debug("requests_cache not installed; API caching disabled")
 except Exception as exc:
+    _cached_http = _http
     log.warning("requests_cache init failed: %s; proceeding without caching", exc)
 
 
 def get_http() -> requests.Session:
-    return _http
+    return _cached_http
 
 
 from services.threat_intel.vt import check_hash, check_urlscan, get_vt_report
